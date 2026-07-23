@@ -2,7 +2,9 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   build: {
-    // Every shipped asset is fingerprinted so `_headers` can cache it forever.
+    // Vite fingerprints everything it emits here, so Vercel caches it
+    // immutably by default. `vercel.json` covers the hand-placed files in
+    // /public that Vite does not fingerprint.
     assetsDir: "assets",
   },
 });

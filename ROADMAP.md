@@ -17,7 +17,7 @@ The floor. Everything else stands on this.
 - [ ] Keyboard input handler capturing typing.
 - [ ] Frame loop with `requestAnimationFrame` and a fixed-timestep physics accumulator.
 - [ ] Basic `debug()` no-op wrapper.
-- [ ] Deployed to Cloudflare Pages under a preview URL. First deploy on day one.
+- [ ] Deployed to Vercel under a preview URL. First deploy on day one.
 
 **Exit criteria:** blank canvas is live at a URL; typing in it does nothing but is captured.
 

@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      ogl:
+        specifier: ^1.0.11
+        version: 1.0.11
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -544,6 +548,9 @@ packages:
 
   natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
+
+  ogl@1.0.11:
+    resolution: {integrity: sha512-kUpC154AFfxi16pmZUK4jk3J+8zxwTWGPo03EoYA8QPbzikHoaC82n6pNTbd+oEaJonaE8aPWBlX7ad9zrqLsA==}
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -1156,6 +1163,8 @@ snapshots:
   nanoid@3.3.16: {}
 
   natural-compare@1.4.0: {}
+
+  ogl@1.0.11: {}
 
   optionator@0.9.4:
     dependencies:

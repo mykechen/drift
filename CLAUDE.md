@@ -37,8 +37,8 @@ If a proposed feature does not directly serve *"typed word becomes a physical bo
 - **Model training (offline):** PyTorch. Training code lives in `/model` and is checked in.
 - **Audio:** Web Audio API directly. Drift's audio needs are small — sample playback with pitch/volume variance, an ambient bed with slow modulation, a master mute. A ~150-line `Sampler` + `Bed` implementation covers everything. Tone.js is a musical framework built for procedural synthesis and sequencing — Drift is neither, and the ~40KB it costs is unjustified. Ship samples as small mp3s from `/public/audio/`.
 - **Build:** Vite. `pnpm` for packages.
-- **Hosting:** Cloudflare Pages. No backend at runtime. All ML is client-side. All assets static.
-- **Caching:** ONNX model files are versioned (`properties.v1.onnx`, `gravity.v1.onnx`) and served with `Cache-Control: public, max-age=31536000, immutable`. Same for the SDF atlas and font files. Configure in `_headers` at the repo root. This is important — the property model will be a few MB after int8 quantization, and cold visits should hit the edge cache, not the origin.
+- **Hosting:** Vercel. No backend at runtime — no serverless functions, no edge functions, no middleware. All ML is client-side. All assets static.
+- **Caching:** ONNX model files are versioned (`properties.v1.onnx`, `gravity.v1.onnx`) and served with `Cache-Control: public, max-age=31536000, immutable`. Same for the SDF atlas and font files. Configure in `vercel.json` at the repo root via its `headers` array. This is important — the property model will be a few MB after int8 quantization, and cold visits should hit the edge cache, not the origin. Note that Vercel fingerprints Vite's own build output under `/assets/` and caches it immutably by default; the rule is for the hand-placed files in `/public/`, which Vercel does not fingerprint.
 - **Domain:** `drift.[TBD]`
 
 Do not introduce dependencies not on this list without asking. Every additional runtime dependency is a liability.

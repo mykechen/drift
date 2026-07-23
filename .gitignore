@@ -12,6 +12,9 @@ dist/
 .env.*
 !.env.example
 
+# Browser automation scratch output
+.playwright-mcp/
+
 # Editor / OS
 .DS_Store
 .idea/

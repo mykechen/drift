@@ -1,0 +1,44 @@
+/*
+ * The canvas is the room. Nothing else is on the page.
+ *
+ * The background color is duplicated from `src/design/palette.ts` on purpose:
+ * it has to be painted by the stylesheet, before any script runs, or the first
+ * frame flashes white. palette.ts remains the source of truth — if BACKGROUND
+ * changes there, change it here too.
+ */
+
+:root {
+  --background: #f4f0e8;
+
+  /* Aspect clamp per DESIGN.md: never narrower than 4:3, never wider than 16:9. */
+  --aspect-min-w: 4;
+  --aspect-min-h: 3;
+  --aspect-max-w: 16;
+  --aspect-max-h: 9;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--background);
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100dvh;
+
+  /* Capping width against height forbids anything wider than 16:9; capping
+     height against width forbids anything taller than 4:3. Between the two,
+     the canvas simply fills the viewport. */
+  max-width: calc(100dvh * var(--aspect-max-w) / var(--aspect-max-h));
+  max-height: calc(100vw * var(--aspect-min-h) / var(--aspect-min-w));
+}
