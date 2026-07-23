@@ -1,0 +1,7 @@
+dist/
+node_modules/
+pnpm-lock.yaml
+
+# The specification documents are authored prose. Prettier reflows emphasis
+# markers and creates diff noise in them for no benefit.
+*.md
