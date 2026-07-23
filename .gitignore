@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+.vite/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+.idea/
+*.swp
+
+# Model training artifacts. Shipping ONNX files live in src/ml/models/ and ARE checked in.
+model/data/
+model/checkpoints/
+model/.venv/
+__pycache__/
+*.pyc
+
+# Licensed fonts. If the display family ships under a commercial license, its
+# binaries must not be published. Uncomment before making this repo public and
+# deliver the font files out-of-band.
+# public/fonts/
