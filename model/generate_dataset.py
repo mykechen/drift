@@ -336,6 +336,11 @@ def run_pass(pass_number: int, args: argparse.Namespace) -> int:
             continue
 
         rows = validate_batch(raw, words, pass_number)
+        # Stamp provenance per row, not per file. Rate limits make it likely a
+        # run is resumed later, possibly on a different model, and a dataset
+        # fused from two calibration scales is invisible without this.
+        for row in rows:
+            row["model"] = args.model
         append_jsonl(out_path, rows)
         written += len(rows)
         print(f"  batch {index}: +{len(rows)} ({written} this run)")
@@ -352,6 +357,15 @@ def merge() -> int:
     complete = [w for w in pass1 if w in pass2]
     if missing := len(pass1) - len(complete):
         print(f"warning: {missing} words have pass-1 but no pass-2 scores", file=sys.stderr)
+
+    models = {row.get("model") for row in pass1.values()}
+    if len(models) > 1:
+        print(
+            f"warning: pass 1 was labeled by more than one model {sorted(m for m in models if m)}. "
+            "Scales may not be comparable; consider relabeling the minority.",
+            file=sys.stderr,
+        )
+    print(f"  labeled by: {', '.join(sorted(m for m in models if m)) or 'unknown'}")
 
     with DATASET_OUT.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
