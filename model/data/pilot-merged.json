@@ -1,0 +1,482 @@
+[
+ {
+  "word": "boulder",
+  "mass": 0.9,
+  "drag": 0.0,
+  "restitution": -0.5,
+  "warmth": 0.0,
+  "age": 0.4,
+  "intensity": 0.3,
+  "drag_old": -0.8
+ },
+ {
+  "word": "feather",
+  "mass": -0.6,
+  "drag": 0.5,
+  "restitution": -0.2,
+  "warmth": 0.1,
+  "age": -0.1,
+  "intensity": -0.5,
+  "drag_old": 0.7
+ },
+ {
+  "word": "stone",
+  "mass": 0.5,
+  "drag": 0.0,
+  "restitution": -0.4,
+  "warmth": 0.0,
+  "age": 0.5,
+  "intensity": 0.0,
+  "drag_old": -0.6
+ },
+ {
+  "word": "silence",
+  "mass": -0.2,
+  "drag": 0.4,
+  "restitution": -0.7,
+  "warmth": -0.4,
+  "age": 0.2,
+  "intensity": -1.0,
+  "drag_old": 0.3
+ },
+ {
+  "word": "ember",
+  "mass": -0.4,
+  "drag": 0.5,
+  "restitution": -0.6,
+  "warmth": 1.0,
+  "age": 0.1,
+  "intensity": 0.2,
+  "drag_old": 0.1
+ },
+ {
+  "word": "whisper",
+  "mass": -0.8,
+  "drag": 0.6,
+  "restitution": -0.5,
+  "warmth": 0.1,
+  "age": -0.1,
+  "intensity": -0.6,
+  "drag_old": 0.4
+ },
+ {
+  "word": "hush",
+  "mass": -0.7,
+  "drag": 0.4,
+  "restitution": -0.6,
+  "warmth": 0.0,
+  "age": -0.1,
+  "intensity": -0.9,
+  "drag_old": 0.5
+ },
+ {
+  "word": "crimson",
+  "mass": 0.2,
+  "drag": 0.1,
+  "restitution": 0.0,
+  "warmth": 0.7,
+  "age": 0.3,
+  "intensity": 0.5,
+  "drag_old": -0.1
+ },
+ {
+  "word": "ancient",
+  "mass": 0.6,
+  "drag": 0.1,
+  "restitution": -0.7,
+  "warmth": 0.1,
+  "age": 1.0,
+  "intensity": 0.1,
+  "drag_old": -0.3
+ },
+ {
+  "word": "scream",
+  "mass": 0.1,
+  "drag": -0.4,
+  "restitution": 0.3,
+  "warmth": 0.6,
+  "age": -0.2,
+  "intensity": 1.0,
+  "drag_old": -0.2
+ },
+ {
+  "word": "dust",
+  "mass": -0.7,
+  "drag": 0.7,
+  "restitution": -0.8,
+  "warmth": 0.1,
+  "age": 0.7,
+  "intensity": -0.7,
+  "drag_old": 0.6
+ },
+ {
+  "word": "ocean",
+  "mass": 0.8,
+  "drag": 0.0,
+  "restitution": -0.3,
+  "warmth": -0.2,
+  "age": 0.9,
+  "intensity": 0.4,
+  "drag_old": -0.2
+ },
+ {
+  "word": "glass",
+  "mass": 0.3,
+  "drag": -0.2,
+  "restitution": 0.1,
+  "warmth": -0.4,
+  "age": 0.0,
+  "intensity": 0.2,
+  "drag_old": -0.4
+ },
+ {
+  "word": "memory",
+  "mass": 0.1,
+  "drag": 0.4,
+  "restitution": -0.4,
+  "warmth": 0.2,
+  "age": 0.6,
+  "intensity": -0.3,
+  "drag_old": 0.4
+ },
+ {
+  "word": "salt",
+  "mass": 0.1,
+  "drag": -0.2,
+  "restitution": -0.5,
+  "warmth": -0.2,
+  "age": 0.4,
+  "intensity": 0.0,
+  "drag_old": 0.0
+ },
+ {
+  "word": "thread",
+  "mass": -0.5,
+  "drag": 0.4,
+  "restitution": -0.2,
+  "warmth": 0.1,
+  "age": 0.1,
+  "intensity": -0.4,
+  "drag_old": 0.3
+ },
+ {
+  "word": "hollow",
+  "mass": -0.3,
+  "drag": 0.3,
+  "restitution": 0.2,
+  "warmth": -0.3,
+  "age": 0.3,
+  "intensity": -0.4,
+  "drag_old": 0.2
+ },
+ {
+  "word": "verse",
+  "mass": -0.1,
+  "drag": 0.3,
+  "restitution": 0.1,
+  "warmth": 0.2,
+  "age": 0.4,
+  "intensity": 0.1,
+  "drag_old": 0.2
+ },
+ {
+  "word": "grief",
+  "mass": 0.8,
+  "drag": 0.0,
+  "restitution": -0.9,
+  "warmth": -0.5,
+  "age": 0.5,
+  "intensity": 0.3,
+  "drag_old": -0.4
+ },
+ {
+  "word": "iron",
+  "mass": 0.8,
+  "drag": 0.0,
+  "restitution": -0.3,
+  "warmth": -0.2,
+  "age": 0.5,
+  "intensity": 0.4,
+  "drag_old": -0.7
+ },
+ {
+  "word": "mist",
+  "mass": -0.9,
+  "drag": 0.8,
+  "restitution": -0.8,
+  "warmth": -0.3,
+  "age": 0.2,
+  "intensity": -0.7,
+  "drag_old": 0.7
+ },
+ {
+  "word": "velvet",
+  "mass": 0.0,
+  "drag": 0.5,
+  "restitution": -0.3,
+  "warmth": 0.4,
+  "age": 0.3,
+  "intensity": -0.3,
+  "drag_old": 0.4
+ },
+ {
+  "word": "cathedral",
+  "mass": 0.9,
+  "drag": 0.0,
+  "restitution": -0.6,
+  "warmth": -0.1,
+  "age": 0.8,
+  "intensity": 0.5,
+  "drag_old": -0.5
+ },
+ {
+  "word": "the",
+  "mass": 0.0,
+  "drag": 0.0,
+  "restitution": 0.0,
+  "warmth": 0.0,
+  "age": 0.2,
+  "intensity": -0.2,
+  "drag_old": 0.1
+ },
+ {
+  "word": "arrow",
+  "mass": 0.0,
+  "drag": -0.4,
+  "restitution": -0.2,
+  "warmth": -0.1,
+  "age": 0.3,
+  "intensity": 0.1,
+  "drag_old": -0.4
+ },
+ {
+  "word": "needle",
+  "mass": -0.3,
+  "drag": -0.7,
+  "restitution": -0.4,
+  "warmth": -0.4,
+  "age": 0.2,
+  "intensity": -0.5,
+  "drag_old": -0.5
+ },
+ {
+  "word": "dart",
+  "mass": -0.1,
+  "drag": -0.6,
+  "restitution": -0.3,
+  "warmth": -0.1,
+  "age": 0.1,
+  "intensity": 0.0,
+  "drag_old": -0.4
+ },
+ {
+  "word": "kite",
+  "mass": -0.5,
+  "drag": 0.7,
+  "restitution": -0.1,
+  "warmth": 0.2,
+  "age": 0.0,
+  "intensity": 0.1,
+  "drag_old": 0.8
+ },
+ {
+  "word": "balloon",
+  "mass": -0.7,
+  "drag": 0.8,
+  "restitution": 0.7,
+  "warmth": 0.2,
+  "age": -0.3,
+  "intensity": -0.2,
+  "drag_old": 0.9
+ },
+ {
+  "word": "bubble",
+  "mass": -0.9,
+  "drag": 0.8,
+  "restitution": -0.5,
+  "warmth": -0.2,
+  "age": -0.5,
+  "intensity": -0.7,
+  "drag_old": 0.9
+ },
+ {
+  "word": "tomb",
+  "mass": 0.8,
+  "drag": 0.0,
+  "restitution": -0.7,
+  "warmth": -0.5,
+  "age": 0.8,
+  "intensity": -0.6,
+  "drag_old": -0.6
+ },
+ {
+  "word": "granite",
+  "mass": 0.8,
+  "drag": 0.0,
+  "restitution": -0.4,
+  "warmth": -0.2,
+  "age": 0.7,
+  "intensity": 0.0,
+  "drag_old": -0.7
+ },
+ {
+  "word": "vault",
+  "mass": 0.8,
+  "drag": 0.0,
+  "restitution": -0.4,
+  "warmth": -0.3,
+  "age": 0.3,
+  "intensity": -0.2,
+  "drag_old": -0.6
+ },
+ {
+  "word": "alarm",
+  "mass": -0.1,
+  "drag": -0.3,
+  "restitution": 0.0,
+  "warmth": 0.0,
+  "age": -0.2,
+  "intensity": 0.9,
+  "drag_old": -0.1
+ },
+ {
+  "word": "siren",
+  "mass": 0.0,
+  "drag": -0.3,
+  "restitution": 0.0,
+  "warmth": 0.1,
+  "age": -0.1,
+  "intensity": 1.0,
+  "drag_old": -0.1
+ },
+ {
+  "word": "spark",
+  "mass": -0.8,
+  "drag": 0.5,
+  "restitution": 0.0,
+  "warmth": 0.9,
+  "age": -0.5,
+  "intensity": 0.2,
+  "drag_old": 0.3
+ },
+ {
+  "word": "chrome",
+  "mass": 0.4,
+  "drag": -0.2,
+  "restitution": 0.2,
+  "warmth": -0.5,
+  "age": -0.3,
+  "intensity": 0.0,
+  "drag_old": -0.4
+ },
+ {
+  "word": "sneaker",
+  "mass": -0.2,
+  "drag": 0.0,
+  "restitution": 0.5,
+  "warmth": 0.2,
+  "age": -0.6,
+  "intensity": 0.1,
+  "drag_old": 0.0
+ },
+ {
+  "word": "screen",
+  "mass": -0.1,
+  "drag": 0.0,
+  "restitution": -0.3,
+  "warmth": -0.2,
+  "age": -0.8,
+  "intensity": -0.1,
+  "drag_old": 0.2
+ },
+ {
+  "word": "rust",
+  "mass": -0.4,
+  "drag": 0.3,
+  "restitution": -0.7,
+  "warmth": 0.2,
+  "age": 0.6,
+  "intensity": -0.6,
+  "drag_old": 0.4
+ },
+ {
+  "word": "cobweb",
+  "mass": -0.9,
+  "drag": 0.8,
+  "restitution": -0.3,
+  "warmth": -0.1,
+  "age": 0.5,
+  "intensity": -0.9,
+  "drag_old": 0.9
+ },
+ {
+  "word": "elastic",
+  "mass": -0.2,
+  "drag": 0.0,
+  "restitution": 0.9,
+  "warmth": 0.0,
+  "age": -0.2,
+  "intensity": 0.0,
+  "drag_old": -0.1
+ },
+ {
+  "word": "trampoline",
+  "mass": 0.3,
+  "drag": 0.0,
+  "restitution": 1.0,
+  "warmth": 0.0,
+  "age": -0.4,
+  "intensity": 0.2,
+  "drag_old": -0.2
+ },
+ {
+  "word": "cork",
+  "mass": -0.5,
+  "drag": 0.2,
+  "restitution": 0.4,
+  "warmth": 0.1,
+  "age": 0.1,
+  "intensity": -0.1,
+  "drag_old": 0.2
+ },
+ {
+  "word": "winter",
+  "mass": -0.1,
+  "drag": 0.3,
+  "restitution": -0.5,
+  "warmth": -0.9,
+  "age": 0.2,
+  "intensity": -0.6,
+  "drag_old": 0.4
+ },
+ {
+  "word": "tundra",
+  "mass": 0.3,
+  "drag": 0.0,
+  "restitution": -0.4,
+  "warmth": -0.9,
+  "age": 0.6,
+  "intensity": -0.7,
+  "drag_old": -0.2
+ },
+ {
+  "word": "marble",
+  "mass": 0.6,
+  "drag": 0.0,
+  "restitution": 0.3,
+  "warmth": -0.3,
+  "age": 0.5,
+  "intensity": 0.1,
+  "drag_old": -0.5
+ },
+ {
+  "word": "moss",
+  "mass": -0.4,
+  "drag": 0.3,
+  "restitution": -0.5,
+  "warmth": -0.1,
+  "age": 0.4,
+  "intensity": -0.8,
+  "drag_old": 0.2
+ }
+]

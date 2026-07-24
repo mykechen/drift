@@ -21,7 +21,9 @@ dist/
 *.swp
 
 # Model training artifacts. Shipping ONNX files live in src/ml/models/ and ARE checked in.
-model/data/
+model/data/*
+# Pilot runs are small and are the evidence behind axes.md — keep them.
+!model/data/pilot-*.json
 model/checkpoints/
 model/.venv/
 __pycache__/

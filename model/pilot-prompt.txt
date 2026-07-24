@@ -1,0 +1,49 @@
+You are calibrating a dataset that gives English words physical properties, for an interactive piece where typed words fall and land like objects.
+
+Rate each word below on six independent axes. Every score is a number from -1.0 to 1.0, to one decimal place.
+
+## The axes
+
+**mass** — how heavy it feels. -1 feather, +1 boulder.
+Ladder: boulder +1.0 · anvil +0.8 · stone +0.5 · book +0.2 · apple 0.0 · leaf -0.3 · feather -0.6 · mist -0.9 · breath -1.0
+
+**drag** — how much the air holds it up as it falls. -1 stone, +1 leaf.
+Ladder: parachute +1.0 · leaf +0.8 · petal +0.5 · paper +0.2 · apple 0.0 · arrow -0.3 · stone -0.6 · bullet -0.9 · anvil -1.0
+
+**restitution** — how much it bounces on landing. -1 clay, +1 rubber.
+Ladder: rubber +1.0 · ball +0.8 · spring +0.5 · wood +0.2 · bone 0.0 · sand -0.3 · clay -0.6 · mud -0.9 · ash -1.0
+
+**warmth** — thermal and tonal temperature. -1 ice, +1 ember.
+Ladder: ember +1.0 · hearth +0.8 · amber +0.5 · bread +0.2 · stone 0.0 · silver -0.3 · frost -0.6 · ice -0.9 · glacier -1.0
+
+**age** — how old the thing the word denotes feels. -1 fresh, +1 ancient.
+Ladder: primordial +1.0 · ruin +0.8 · parchment +0.5 · oak +0.2 · house 0.0 · plastic -0.3 · neon -0.6 · pixel -0.9 · debut -1.0
+
+**intensity** — how loud and forceful it feels. -1 quiet, +1 scream.
+Ladder: scream +1.0 · blast +0.8 · shout +0.5 · speak +0.2 · walk 0.0 · murmur -0.3 · whisper -0.6 · hush -0.9 · silence -1.0
+
+## Rules
+
+1. Score the felt quality, not the literal fact. Abstract words have no physical mass, but they have an imagined one. "grief" is heavy. "whim" is light. Every word gets six numbers regardless of whether it denotes an object.
+
+2. Use the whole range. If every word lands between -0.2 and +0.2 the dataset is worthless. Most words sit in the middle, but populate the tails.
+
+3. The axes are independent. "arrow" is low mass AND low drag. "balloon" is low mass AND high drag. Do not let one score pull another along.
+
+4. warmth is temperature, not pleasantness. "fever" is warm and unpleasant. "silver" is cool and desirable. Do not score how nice the word is.
+
+5. age is about the thing, not the word. "ruin" is ancient even though the word itself is ordinary English.
+
+6. Never refuse or skip. Every word in the list gets a row.
+
+## Output
+
+Return a single JSON array, nothing else. No commentary before or after.
+
+[
+  {"word": "boulder", "mass": 0.9, "drag": -0.8, "restitution": -0.5, "warmth": 0.0, "age": 0.4, "intensity": 0.3}
+]
+
+## Words
+
+boulder, feather, stone, silence, ember, whisper, hush, crimson, ancient, scream, dust, ocean, glass, memory, salt, thread, hollow, verse, grief, iron, mist, velvet, cathedral, the
