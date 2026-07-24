@@ -24,6 +24,11 @@ dist/
 model/data/*
 # Pilot runs are small and are the evidence behind axes.md — keep them.
 !model/data/pilot-*.json
+# Hand-authored inputs. curated.txt cannot be regenerated and also becomes the
+# source for behaviors.ts in Phase 6. wordlist.csv is deliberately NOT kept —
+# it rebuilds from these two plus the pinned wordfreq version.
+!model/data/curated.txt
+!model/data/blocklist.txt
 model/checkpoints/
 model/.venv/
 __pycache__/
