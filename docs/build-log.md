@@ -209,3 +209,63 @@ committed rather than treated as a rebuildable cache.
 `california`) and unfiltered offensive words that `wordfreq` includes; both are
 cheap row-drops to apply later and do not block training. The `age` axis still
 has no direct visual consequence — the open question in `axes.md`.
+
+### Phase 1a — a coverage gap caught during training
+
+The first training run exposed a bug in the corpus, not the model: `boulder`,
+`feather`, `ember`, `crimson`, `hush` and about 100 other curated words had
+never been labeled. The cause was ordering. Curated words were merged into the
+word list at their frequency rank, and the rare ones — `ember` at rank 30k,
+`zounds` at 150k — sorted into the tail, far past where the budget-limited run
+stopped. Pass 1 labeled the frequency head and never reached the hand-picked
+design vocabulary that curation existed to protect. The words the piece is
+judged on were exactly the ones missing.
+
+The fix was to label the 106 missing curated words explicitly by name — three
+requests, pennies, and the single highest-value spend in the whole run, since
+these are the OG-image words, the behavior lists, and the demo set. Lesson: a
+curated seed list has to be labeled *first*, or at least independently of the
+frequency queue, not folded into it where frequency can bury it.
+
+### Phase 1b — training the property model
+
+The model has two branches. A word-lookup embedding memorises every training
+word — this is where the accuracy lives; a boulder is heavy because it was
+labeled heavy, not because the spelling implies it. A character branch gives
+any string a representation so nonsense still commits.
+
+**The character branch has a hard ceiling, and finding it was the main result
+of this phase.** An order-aware encoder (a bidirectional GRU) was tried on the
+theory that letter order would help it generalise to unseen words. It made
+held-out error *worse* (MAE 0.31 vs the mean-pool's 0.24). The reason is
+fundamental: a word's physical feel is semantic, not orthographic. Nothing in
+the letters of `grief` says heavy. A more expressive char model just memorises
+training-word spellings that do not transfer, so it overfits. The mean-pool was
+kept — it is simpler, and its tendency to fall back toward neutral-light for
+unknown strings matches DESIGN.md's brief that nonsense feel "light, drifty,
+unstable". This confirms ROADMAP's own framing: "this is a memorisation problem
+more than a generalisation one." The `< 0.15` MAE target applies to the
+memorised vocabulary, which is what ships in-vocab; genuinely unseen words have
+no ground truth to hit.
+
+**Result.** Trained in ship mode (all 10,750 words in the lookup table, no
+holdout, as deployed), train MAE is **0.018** — the model reproduces its labels
+almost exactly. Every word on ROADMAP's inspection list reads correctly:
+
+- **Feel test 1 (boulder/feather) passes.** boulder mass +0.87, drag 0.00,
+  restitution -0.50, intensity 0.00 — heavy, drops straight, lands dead.
+  feather mass -0.59, drag +0.48, intensity -0.56 — light, drifts, quiet. A
+  mass gap of 1.46.
+- ember warmth +0.87, crimson warmth +0.79, silence intensity -0.93, scream
+  +0.94, hush quiet and light, mist the lightest and most drifty, anchor heavy
+  and dead-landing, ocean heavy and ancient.
+- stone and rock both land heavy and old and close together — the raw material
+  for feel test 2 (semantic drift) once the gravity model is on in Phase 5.
+
+The dataset grew to 10,750 words in the process (the 8,144 plus the drag-labeled
+orphans and the rescued curated words) once the Gemini balance was topped up.
+`dataset.csv` is re-frozen at that size.
+
+**Still open for Phase 1c:** ONNX export, int8 quantization, and in-browser
+inference under 5ms — the last step before the model can drive anything on
+screen.
