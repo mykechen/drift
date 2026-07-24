@@ -1,0 +1,168 @@
+/*
+ * Internal tool, not the piece. It borrows the paper and ink from the palette
+ * so the scores are read against the surface they will eventually be drawn on
+ * — a warmth score looks different on white than it does on this — but nothing
+ * else here is a design decision. Mono throughout, because every value on the
+ * page is a number that wants to line up with the number above it.
+ */
+
+:root {
+  --paper: #f4f0e8;
+  --ink: #1a1817;
+  --accent: #d94f1e;
+  --rule: rgb(26 24 23 / 0.14);
+  --muted: rgb(26 24 23 / 0.5);
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+}
+
+#panel {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 6rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#status {
+  margin: 0.25rem 0 2rem;
+  color: var(--muted);
+}
+
+#word {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 2rem;
+  letter-spacing: -0.01em;
+}
+
+#word:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+
+#word::placeholder {
+  color: var(--rule);
+}
+
+#verdict {
+  min-height: 1.5rem;
+  margin: 0.5rem 0 2rem;
+  color: var(--muted);
+}
+
+#verdict[data-branch="char"] {
+  color: var(--accent);
+}
+
+/* Six rows of: axis name, a bar centred on zero, the value. */
+#axes {
+  display: grid;
+  grid-template-columns: 6rem 1fr 4rem;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  margin: 0;
+}
+
+#axes dt {
+  color: var(--muted);
+}
+
+#axes dd {
+  margin: 0;
+}
+
+#axes dd.value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The bar reads -1 at the left edge and +1 at the right, so the centre line is
+ * zero and a fill's direction is the sign. Absolute magnitude alone would make
+ * a heavy word and a weightless one look identical.
+ */
+.track {
+  position: relative;
+  height: 0.5rem;
+  background: rgb(26 24 23 / 0.05);
+}
+
+.track::before {
+  content: "";
+  position: absolute;
+  inset-block: -0.25rem;
+  left: 50%;
+  width: 1px;
+  background: var(--rule);
+}
+
+.fill {
+  position: absolute;
+  inset-block: 0;
+  background: var(--ink);
+  transition: none;
+}
+
+#bench {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+#bench label {
+  color: var(--muted);
+}
+
+select,
+button {
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--rule);
+  padding: 0.35rem 0.6rem;
+}
+
+button:not(:disabled):hover {
+  border-color: var(--accent);
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+  color: var(--muted);
+}
+
+#bench-output {
+  flex-basis: 100%;
+  margin: 0.5rem 0 0;
+  white-space: pre-wrap;
+  color: var(--muted);
+}

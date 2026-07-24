@@ -1,0 +1,8 @@
+# pnpm 11 reads settings from here, not from a "pnpm" field in package.json.
+#
+# protobufjs arrives as a transitive dependency of onnxruntime-web and ships a
+# postinstall that wires up its CLI codegen. Nothing in the browser build
+# touches it, so the script is denied outright rather than approved — pnpm
+# fails the install on unresolved build scripts, and silence is not a decision.
+allowBuilds:
+  protobufjs: false

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      Internal tool. It is built into the deploy so the shipping model can be
+      exercised from any machine, but nothing links to it and it is kept out of
+      every index. See public/robots.txt.
+    -->
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Drift — properties</title>
+    <script type="module" src="/src/debug/properties.ts"></script>
+  </head>
+  <body>
+    <main id="panel">
+      <header>
+        <h1>properties</h1>
+        <p id="status" role="status">loading the model…</p>
+      </header>
+
+      <input
+        id="word"
+        type="text"
+        autocomplete="off"
+        autocapitalize="off"
+        autocorrect="off"
+        spellcheck="false"
+        placeholder="type a word"
+        disabled
+      />
+      <p id="verdict"></p>
+
+      <dl id="axes"></dl>
+
+      <section id="bench">
+        <label for="backend">backend</label>
+        <select id="backend" disabled>
+          <option value="webgpu">webgpu (falls back to wasm)</option>
+          <option value="wasm">wasm only</option>
+        </select>
+        <button id="run-bench" type="button" disabled>
+          benchmark 300 words
+        </button>
+        <pre id="bench-output"></pre>
+      </section>
+    </main>
+  </body>
+</html>

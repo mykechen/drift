@@ -3,7 +3,9 @@ import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "model/**", "node_modules/**"] },
+  // `.venv` holds the Python training environment; some of its wheels ship
+  // vendored JavaScript, which is neither ours nor written for a browser.
+  { ignores: [".venv/**", "dist/**", "model/**", "node_modules/**"] },
 
   js.configs.recommended,
 
