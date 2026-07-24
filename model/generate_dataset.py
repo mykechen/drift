@@ -35,8 +35,29 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 MODEL_DIR = Path(__file__).parent
+REPO_ROOT = MODEL_DIR.parent
 DATA_DIR = MODEL_DIR / "data"
 PROMPT_DIR = MODEL_DIR / "prompts"
+
+
+def load_dotenv_if_present() -> None:
+    """Read .env / .env.local into the environment, if python-dotenv is installed.
+
+    Never name a key here with a VITE_ prefix. Vite inlines those into the
+    client bundle at build time, which would publish the key to every visitor.
+    Anything unprefixed is invisible to the browser build.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    # .env.local first: with override=False the first file to set a name wins,
+    # which gives local the precedence the convention expects.
+    for name in (".env.local", ".env"):
+        load_dotenv(REPO_ROOT / name, override=False)
+
+
+load_dotenv_if_present()
 
 WORDLIST = DATA_DIR / "wordlist.csv"
 PASS1_OUT = DATA_DIR / "labels-pass1.jsonl"

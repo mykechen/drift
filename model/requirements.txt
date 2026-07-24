@@ -1,6 +1,10 @@
 # Offline training pipeline only. Nothing here ships to the browser.
 wordfreq==3.1.1
 
+# Reads .env.local / .env so the API key does not have to be exported by hand.
+# Optional: without it, export the variables in your shell instead.
+python-dotenv
+
 # Labeling providers. Install only the one you are using — generate_dataset.py
 # imports them lazily, so --dry-run works with neither installed.
 #   pip install google-genai     # --provider gemini
