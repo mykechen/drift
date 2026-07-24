@@ -43,17 +43,21 @@ Transitions between periods are 30-minute smoothstep interpolations. Compute at 
 
 ## Typography
 
-**Display type (word bodies):** Söhne Breit by Klim Type Foundry. Variable weight, variable optical size axes both required.
+**Display type (word bodies):** Archivo by Omnibus-Type. Variable, `wght` and `wdth` axes both required. SIL Open Font License; the variable file ships in `/public/fonts/`.
 
-**UI / meta type (footer, credit line):** Söhne Mono by Klim.
+> **Changed in Phase 2.** This originally specified Söhne Breit by Klim Type Foundry with variable weight and optical size. Klim ships Söhne — including Söhne Breit — as **static fonts only**: eight weights in roman and italic, no `wght` axis and no `opsz` axis. The variable-axis wiring below is load-bearing (`CLAUDE.md` calls it "the word IS the body" and says do not skip it), and a commit spring animating across eight discrete masters would pop rather than spring. Archivo is a grotesque in the same Akzidenz lineage with genuine designed masters across `wght 100–900` and `wdth 62–125`, and it is free, which removed the licensing question at the same time.
+
+**UI / meta type (footer, credit line, watermark):** undecided. Needs a mono; not required until Phase 3.
 
 **Fallback stack:** `ui-sans-serif, -apple-system, "SF Pro", "Inter", sans-serif` during font load. The first-load screen is intentionally still and quiet — the font swap should be imperceptible because there's nothing to compare against yet.
 
 **Variable axis wiring:**
 
 - `wght` (weight): mapped from `mass` property score. Range 300 → 800 across the mass range.
-- `opsz` (optical size): mapped from `intensity` property score. Higher intensity = larger optical size = tighter proportional metrics = more visually assertive glyph shapes.
-- Both axes should animate on commit — the in-progress word renders at neutral values, then springs to the model-predicted values in ~180ms with an overshoot spring.
+- `wdth` (width): mapped from `intensity` property score. Range 85 → 125. Higher intensity = wider = more visually assertive glyph shapes.
+  - This replaces the original `opsz` mapping, whose stated intent was "tighter proportional metrics = more visually assertive glyph shapes" — which describes a width behaviour more than an optical-size one. Width also does more work here than optical size would: it changes the glyph silhouette substantially (`o` measures 306 units wide at `wdth 62` against 696 at `wdth 125`, at fixed height), so an intense word is a physically wider body, not just a differently-drawn one.
+- Both axes animate on commit — the in-progress word renders at neutral values (`wght 500, wdth 100`), then springs to the model-predicted values in ~180ms with an overshoot spring.
+- Outlines across axis values are point-compatible, so a word's collision geometry can be interpolated rather than re-decomposed every frame of that spring.
 
 **No serifs anywhere.** No system fallback to a serif.
 
@@ -115,7 +119,7 @@ The ambient bed is the piece's atmosphere. Get it right. Reference: the ambient 
 
 ### Typing state — no committed word yet
 
-- Letters appear at the cursor position as you type. Rendered in Söhne Breit at neutral variable-axis values (`wght: 500, opsz: normal`).
+- Letters appear at the cursor position as you type. Rendered in Archivo at neutral variable-axis values (`wght: 500, wdth: 100`).
 - Letters are NOT physics bodies yet. They are ordinary rendered text bound to the cursor.
 - No shadow beneath in-progress letters.
 - Backspace erases the last letter. If the word is empty, backspace is a no-op (small subtle shake to indicate).
@@ -197,7 +201,7 @@ The ambient bed is the piece's atmosphere. Get it right. Reference: the ambient 
 - Renders the current canvas at 2× resolution to a PNG.
 - Downloads immediately as `drift-YYYYMMDD-HHMMSS.png`.
 - No modal. No settings. No confirmation.
-- The exported PNG includes a small watermark in the bottom-right: `drift.[domain]` in Söhne Mono at 10pt, 40% opacity.
+- The exported PNG includes a small watermark in the bottom-right: `drift.[domain]` in the mono face at 10pt, 40% opacity.
 
 ### Session replay URL
 
@@ -211,7 +215,7 @@ The ambient bed is the piece's atmosphere. Get it right. Reference: the ambient 
 
 - Detect via viewport width < 768px OR touch-only.
 - Show a full-viewport static image of an example composition, generated at build time.
-- Below it, a single line in Söhne Mono: `Drift is made for a keyboard. Come back on a desktop.`
+- Below it, a single line in the mono face: `Drift is made for a keyboard. Come back on a desktop.`
 - No back button. No dismiss. The mobile page IS the piece for that visitor.
 
 ---

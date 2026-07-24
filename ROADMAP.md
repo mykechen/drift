@@ -71,11 +71,11 @@ The floor. Everything else stands on this.
 
 Now that words have properties, make them things.
 
-- [ ] Glyph outline extraction with opentype.js. Load Söhne Breit; extract outlines for any word.
-- [ ] Convex decomposition of glyph paths. Verify manually on `o`, `e`, `p`, `d`, `g` — these are the failure cases.
+- [ ] Glyph outline extraction with fontkit. Load Archivo variable; extract outlines for any word at arbitrary `wght`/`wdth`.
+- [ ] Convex decomposition of glyph paths via earcut, classifying contours by winding. Verify manually on `o`, `e`, `p`, `d`, `g`, `a`, `b`, `q` — and on `i`, whose two contours are both outer, which is the case a naive implementation gets wrong.
 - [ ] SDF atlas generation (build-time or first-load).
 - [ ] SDF rendering shader in OGL. Crisp glyphs at any scale.
-- [ ] Wire variable font axes (`wght`, `opsz`) to property scores. Verify on a static test page — a boulder and a feather side by side, rendered by their scores.
+- [ ] Wire variable font axes (`wght` ← mass, `wdth` ← intensity) to property scores. Verify on a static test page — a boulder and a feather side by side, rendered by their scores.
 - [ ] Rapier 2D world set up. Gravity down. Canvas boundaries as walls (bottom + sides), open top.
 - [ ] Commit pipeline: word → outlines → convex hulls → Rapier compound body with mass/drag/restitution from properties.
 - [ ] Physics substepping and density-aware framerate management.

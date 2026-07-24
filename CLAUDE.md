@@ -30,9 +30,13 @@ If a proposed feature does not directly serve *"typed word becomes a physical bo
 - **Framework:** [Vite](https://vitejs.dev/) + vanilla TS. No React, no Vue, no Svelte. The piece has no component tree worth managing.
 - **Rendering:** WebGL via [OGL](https://github.com/oframe/ogl) (preferred) or [regl](https://github.com/regl-project/regl). NOT Three.js.
   - *Future note:* WebGPU is viable in 2026 (Chrome, Edge, Safari; Firefox still lagging). If v2 introduces compute-shader work — for example, moving the semantic-gravity force field onto the GPU — migrating to WebGPU via `webgpu-utils` becomes worthwhile. For v1, WebGL is correct: broader support, less setup, and no compute shaders in scope.
-- **Glyph rendering:** SDF-rendered. Use [fontkit](https://github.com/foliojs/fontkit) for outlines. Fontkit is preferred over opentype.js for better OpenType feature support — ligatures, contextual alternates, and variable font axis handling all work out of the box, which matters because Söhne Breit's ligatures carry design intent. SDF atlas generated at build time or first-load and cached.
+- **Display typeface:** [Archivo](https://github.com/Omnibus-Type/Archivo) variable (`wght 100–900`, `wdth 62–125`), SIL OFL, in `/public/fonts/Archivo.ttf`. Replaced Söhne Breit in Phase 2 because Klim ships Söhne static-only and the variable-axis wiring is load-bearing — see the note in `DESIGN.md`. Archivo is TrueType, so outlines are quadratic curves only; there are no cubics to flatten.
+- **Glyph rendering:** SDF-rendered. Use [fontkit](https://github.com/foliojs/fontkit) for outlines — verified working in the browser under Vite via its `browser-module.mjs` ESM build. `font.getVariation({ wght, wdth })` returns interpolated outlines at arbitrary axis values, and outlines across axis settings are point-compatible. SDF atlas generated at build time or first-load and cached. Note the browser build is ~545KB raw; if that becomes a problem, outlines can be baked at build time at a few axis samples and interpolated at runtime, since point-compatibility guarantees it.
 - **Physics:** [Rapier2D](https://rapier.rs/) via WASM. NOT Matter.js.
-- **Convex decomposition:** required for glyph collision shapes. Use [decomp.js](https://github.com/pshihn/decomp.js) — a modern rewrite of poly-decomp with better output quality (fewer, cleaner hulls) on the specific shapes glyphs produce. Non-convex glyphs (o, e, p, a, d, g, q, b, etc.) will misbehave without decomposition — non-negotiable.
+- **Convex decomposition:** required for glyph collision shapes. Use [earcut](https://github.com/mapbox/earcut) to tessellate, then merge triangles into convex hulls.
+  - This originally specified `decomp.js`, described as "a modern rewrite of poly-decomp." **That package does not exist** — the linked repository 404s and there is no such npm package. The real alternative, `poly-decomp`, does not handle holes, which is precisely the stated problem. earcut handles holes natively, is ~2KB, and is battle-tested in Mapbox GL.
+  - **Contour count does not tell you about holes.** `i` has two contours that are both outer (stem and tittle); `o` has two where the second is a hole; `g` has three. Classify by signed area to get winding, then assign each hole to the outer contour containing it. Getting this wrong makes `i` a solid blob or `o` a solid disc, and both look fine until something has to land in the counter.
+  - Non-convex glyphs (o, e, p, a, d, g, q, b) will misbehave without decomposition — non-negotiable.
 - **ML runtime:** [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/), **WebAssembly backend only** — import the `onnxruntime-web/wasm` entry, single-threaded. This originally specified WebGPU with a WASM fallback; Phase 1c measured both and WebGPU lost on every axis. On an Apple Metal-3 adapter the property model runs at p50 0.10ms / p95 0.20ms on WASM against p50 1.50ms / p95 2.30ms on WebGPU, with a 326ms cold first inference, and ORT's WebGPU build needs the 23MB Asyncify binary where the plain build needs 13MB (3.28MB vs 2.05MB brotli). Both causes are structural: a 570k-parameter model with a batch of one has nothing to parallelise, so per-dispatch overhead is the entire cost. Note that the wasm binary is coupled to the entry point — each ORT build binds only to its matching `.wasm`, and a mismatch fails deep inside the runtime with a mangled-name `TypeError`. Phase 5's force field is a different shape and gets measured on its own terms rather than inheriting this.
 - **Model training (offline):** PyTorch. Training code lives in `/model` and is checked in.
 - **Audio:** Web Audio API directly. Drift's audio needs are small — sample playback with pitch/volume variance, an ambient bed with slow modulation, a master mute. A ~150-line `Sampler` + `Bed` implementation covers everything. Tone.js is a musical framework built for procedural synthesis and sequencing — Drift is neither, and the ~40KB it costs is unjustified. Ship samples as small mp3s from `/public/audio/`.
@@ -65,7 +69,7 @@ Do not introduce dependencies not on this list without asking. Every additional 
 │   │   ├── renderer.ts       (OGL/regl scene, SDF glyph rendering)
 │   │   ├── input.ts          (keyboard state, word buffer, commit logic)
 │   │   ├── loop.ts           (frame loop, physics substepping, sleep mgmt)
-│   │   └── glyphs.ts         (opentype.js → outlines → convex hulls → SDF)
+│   │   └── glyphs.ts         (fontkit → outlines → convex hulls → SDF)
 │   ├── /ml
 │   │   ├── properties.ts     (word → 6 property scores, ONNX inference)
 │   │   ├── gravity.ts        (semantic gravity force field)
@@ -86,7 +90,7 @@ Do not introduce dependencies not on this list without asking. Every additional 
 │   ├── export_onnx.py
 │   └── /data                 (word lists, labels, embeddings — gitignored if large)
 ├── /public
-│   ├── /fonts                (Söhne Breit + Söhne Mono, licensed)
+│   ├── /fonts                (Archivo variable, SIL OFL — checked in)
 │   ├── og.png                (1200×630 OG image, static)
 │   └── favicon.svg
 └── /scripts
@@ -113,7 +117,7 @@ Do not introduce dependencies not on this list without asking. Every additional 
 
 The single most important architectural decision:
 
-- **Words are their own glyph outlines as physics bodies.** Not textured quads. Not sprites. Use opentype.js to extract the actual Bézier outlines of the current word, decompose into convex hulls, feed those to Rapier as compound colliders. Render the same outlines via SDF for crispness at any scale.
+- **Words are their own glyph outlines as physics bodies.** Not textured quads. Not sprites. Use fontkit to extract the actual outlines of the current word at its predicted axis values, decompose into convex hulls, feed those to Rapier as compound colliders. Render the same outlines via SDF for crispness at any scale.
 - **Variable font axes are driven by physics state.** Weight and optical size are wired to the ML property scores. A word predicted heavy renders heavier. This is the "the word IS the body" move. Do not skip it.
 - **Physics runs at a target of 120Hz below 100 bodies, 60Hz between 100 and 200.** Density-aware. Automatic. Invisible to the user.
 - **Bodies sleep aggressively.** Rapier's sleep thresholds tuned so a settled word stops simulating within ~500ms of coming to rest.

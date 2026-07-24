@@ -50,7 +50,7 @@ Structure:
 
 ### 2. `drift-glyphs` — how glyphs become physics bodies
 
-Encodes the glyph rendering + convex decomposition pipeline (fontkit for outlines, decomp.js for hulls, SDF for rendering). Prevents Claude Code from suggesting "just use a rectangle with text on it" the third time you refactor.
+Encodes the glyph rendering + convex decomposition pipeline (fontkit for outlines, earcut for hulls, SDF for rendering). Prevents Claude Code from suggesting "just use a rectangle with text on it" the third time you refactor.
 
 Structure:
 

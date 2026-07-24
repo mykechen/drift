@@ -77,11 +77,11 @@ That's it. No dash, no separator, no "— a room of language."
 
 `drift`
 
-Set in Söhne Breit at a large size, off-white background, near-black ink. Nothing else on the OG image except a small watermark and one hero composition. See "OG image" below.
+Set in Archivo at a large size, off-white background, near-black ink. Nothing else on the OG image except a small watermark and one hero composition. See "OG image" below.
 
 ### 4. The footer of the piece
 
-Three items, evenly spaced, in Söhne Mono at 11pt, `#1A1817` at 60% opacity:
+Three items, evenly spaced, in the mono face at 11pt, `#1A1817` at 60% opacity:
 
 - `drift`
 - Icons (from left): sound toggle, save image, copy replay URL
@@ -93,7 +93,7 @@ The right-hand item's `GitHub` is a link. The name is not a link. If you want it
 
 `Drift is made for a keyboard. Come back on a desktop.`
 
-Söhne Mono, centered under a static composition image.
+The mono face, centered under a static composition image.
 
 ### 6. The 404 page
 
@@ -116,7 +116,7 @@ The single most important marketing surface. This is what appears when the link 
 - **Dimensions:** 1200 × 630 px
 - **Background:** `#F4F0E8` with the standard procedural grain
 - **Composition:** a hand-designed still of an ideal Drift room — approximately 25–40 words settled naturally, chosen for beauty. The word `drift` itself set larger than the others, near the visual center of the composition but not exactly centered. Suggested corpus for the OG image: _stone, feather, weather, silence, ember, cloud, salt, memory, hush, crimson, verse, echo, moss, thread, tide, quiet, ash, hollow, glass, morning, whisper, cinder, hollow, grain, drift_.
-- **Watermark:** bottom-right, `drift.[domain]` in Söhne Mono 12pt, `#1A1817` at 40% opacity, 24px margin from both edges.
+- **Watermark:** bottom-right, `drift.[domain]` in the mono face 12pt, `#1A1817` at 40% opacity, 24px margin from both edges.
 - **No other text.** No "portfolio piece," no "by [YOUR NAME]," no tagline.
 - **File:** `/public/og.png`. Static. Regenerated when the visual design of the piece is updated.
 
@@ -129,7 +129,7 @@ Twitter card uses the same image with `summary_large_image` card type.
 - SVG. A single filled circle of ink (`#1A1817`) at 60% of the SVG's bounding box, on a transparent background. Nothing else.
 - Fallback ICO at 32×32 for older browsers, same content.
 
-Not a "D." Not a Söhne Breit letterform. Just the circle. The circle reads as a body, a full stop, a period, a sediment particle — many things. Ambiguity is the design.
+Not a "D." Not an Archivo letterform. Just the circle. The circle reads as a body, a full stop, a period, a sediment particle — many things. Ambiguity is the design.
 
 ---
 

@@ -16,6 +16,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/earcut": "^3.0.0",
     "eslint": "^10.7.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
@@ -24,6 +25,9 @@
     "vite": "^8.1.5"
   },
   "dependencies": {
+    "@dimforge/rapier2d-compat": "^0.19.3",
+    "earcut": "^3.2.3",
+    "fontkit": "^2.0.4",
     "ogl": "^1.0.11",
     "onnxruntime-web": "^1.27.0"
   }
