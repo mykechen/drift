@@ -1,5 +1,6 @@
 import { Color, Geometry, Mesh, Program, Renderer, Transform } from "ogl";
 import { BACKGROUND, INK } from "../design/palette";
+import type { WordOutline } from "./glyphs";
 import type { WordBody } from "./physics";
 import { debug } from "../util/debug";
 
@@ -54,7 +55,15 @@ export interface RoomRenderer {
   readonly aspect: () => number;
   /** Give a committed body a mesh built from its own triangulation. */
   readonly attach: (body: WordBody) => void;
-  /** Drop every mesh. */
+  /**
+   * Show the word being typed, at the cursor. Pass null to clear it.
+   *
+   * Rebuilt on every keystroke rather than transformed, because the shape of the
+   * word genuinely changes with each letter. The old mesh is disposed each time;
+   * one allocation per keystroke is nothing next to a frame.
+   */
+  readonly setDraft: (outline: WordOutline | null) => void;
+  /** Drop every mesh, committed and draft. */
   readonly detachAll: () => void;
   /** Re-reads the canvas's CSS size and resizes the drawing buffer to match. */
   readonly resize: () => void;
@@ -90,6 +99,8 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   const scene = new Transform();
   const ink = new Color(INK);
   const meshes = new Map<number, Mesh>();
+  /** The word being typed. One at a time, replaced wholesale on each keystroke. */
+  let draft: Mesh | null = null;
 
   /**
    * OGL's `setSize` writes inline `width`/`height` pixel styles onto the canvas
@@ -117,11 +128,8 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     debug("render", "resize", width, height, `dpr=${renderer.dpr}`);
   }
 
-  function attach(body: WordBody): void {
-    const positions = body.geometry.triangles;
-    if (positions.length === 0) return;
-
-    const mesh = new Mesh(gl, {
+  function buildMesh(positions: Float32Array): Mesh {
+    return new Mesh(gl, {
       geometry: new Geometry(gl, {
         position: { size: 2, data: positions },
       }),
@@ -133,8 +141,8 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
         uniforms: {
           uTranslation: { value: [0, 0] },
           uRotation: { value: 0 },
-          // Set per frame from the room's own scale, so the mesh's em units
-          // land at the same size the colliders were built at.
+          // Set per frame from the room's own scale, so a mesh's em units land
+          // at the same size the colliders were built at.
           uScale: { value: 1 },
           uRoomHalfExtent: { value: [1, 1] },
           uInk: { value: [ink.r, ink.g, ink.b] },
@@ -142,13 +150,30 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
         },
       }),
     });
+  }
+
+  function attach(body: WordBody): void {
+    const positions = body.geometry.triangles;
+    if (positions.length === 0) return;
+    const mesh = buildMesh(positions);
     mesh.setParent(scene);
     meshes.set(body.id, mesh);
+  }
+
+  function setDraft(outline: WordOutline | null): void {
+    if (draft) {
+      draft.setParent(null);
+      draft = null;
+    }
+    if (!outline || outline.triangles.length === 0) return;
+    draft = buildMesh(outline.triangles);
+    draft.setParent(scene);
   }
 
   function detachAll(): void {
     for (const mesh of meshes.values()) mesh.setParent(null);
     meshes.clear();
+    setDraft(null);
   }
 
   // Before anything reads the canvas. The Renderer constructor writes a 300x150
@@ -163,6 +188,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     scene,
     aspect: (): number => canvas.clientWidth / Math.max(canvas.clientHeight, 1),
     attach,
+    setDraft,
     detachAll,
     resize,
     render(
@@ -186,6 +212,21 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           roomHalfHeight,
         ];
       }
+      if (draft) {
+        const uniforms = draft.program.uniforms;
+        // The cursor is fixed at the centre of the room per DESIGN.md, and the
+        // draft is centred on it rather than growing rightward from a caret —
+        // which keeps the composition centred and matches where the committed
+        // body will spawn.
+        (uniforms["uTranslation"] as { value: number[] }).value = [0, 0];
+        (uniforms["uRotation"] as { value: number }).value = 0;
+        (uniforms["uScale"] as { value: number }).value = wordScale;
+        (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
+          roomHalfWidth,
+          roomHalfHeight,
+        ];
+      }
+
       renderer.render({ scene });
     },
   };

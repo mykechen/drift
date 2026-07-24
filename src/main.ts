@@ -21,7 +21,11 @@ import {
   type PhysicsRoom,
 } from "./engine/physics";
 import { createRoomRenderer } from "./engine/renderer";
-import { axesForScores, DISPLAY_FONT_URL } from "./design/typography";
+import {
+  axesForScores,
+  DISPLAY_FONT_URL,
+  NEUTRAL_AXES,
+} from "./design/typography";
 import { loadPropertyModel, type PropertyModel } from "./ml/properties";
 import { NEUTRAL_SCORES } from "./ml/fallback";
 import { debug } from "./util/debug";
@@ -78,9 +82,18 @@ async function commitWord(
 
 attachWordInput(window, {
   onChange(buffer): void {
-    debug("input", `buffer "${buffer}"`);
+    // The uncommitted word renders at neutral axes, not at the axes its scores
+    // imply. Per DESIGN.md the model's opinion arrives *on commit* — that is the
+    // moment the commit spring exists to dramatise, and pre-empting it would
+    // spend the effect before the word is a body.
+    renderer.setDraft(
+      buffer.length === 0 ? null : glyphs.outlineFor(buffer, NEUTRAL_AXES),
+    );
   },
   onCommit(word): void {
+    // Cleared here rather than after inference resolves, so the draft does not
+    // linger for a frame on top of the body that replaces it.
+    renderer.setDraft(null);
     void commitWord(properties, glyphs, room, word);
   },
 });

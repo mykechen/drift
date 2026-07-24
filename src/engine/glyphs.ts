@@ -72,6 +72,21 @@ export interface WordGeometry {
   readonly height: number;
 }
 
+/**
+ * Just enough to draw a word. No collision geometry.
+ *
+ * This is the in-progress word at the cursor, which per DESIGN.md is "NOT a
+ * physics body" — ordinary rendered text until it commits. Skipping the convex
+ * decomposition matters because this is rebuilt on every keystroke and merging
+ * is the expensive half of the pipeline.
+ */
+export interface WordOutline {
+  /** Flat `[x, y]` pairs, three vertices per triangle, em units, centred. */
+  readonly triangles: Float32Array;
+  readonly width: number;
+  readonly height: number;
+}
+
 export interface GlyphSource {
   /**
    * Geometry for a word at given axis values. Cached per word, axis pair and
@@ -79,6 +94,8 @@ export interface GlyphSource {
    * always uses the default.
    */
   geometryFor(word: string, axes: FontAxes, tolerance?: number): WordGeometry;
+  /** Drawable triangles only, for the uncommitted word. Skips hull merging. */
+  outlineFor(word: string, axes: FontAxes, tolerance?: number): WordOutline;
   /** Advance width of a word in em units, without building geometry. */
   advanceFor(word: string, axes: FontAxes): number;
 }
@@ -499,6 +516,22 @@ function mergeIntoConvexPieces(
   return pieces.filter((ring): ring is number[] => ring !== null);
 }
 
+/** Triangulate one shape into flat `[x, y]` vertex pairs, three per triangle. */
+function trianglesForShape(shape: Shape): number[] {
+  const vertices: number[] = [...shape.outer.points];
+  const holeStarts: number[] = [];
+  for (const hole of shape.holes) {
+    holeStarts.push(vertices.length / 2);
+    vertices.push(...hole.points);
+  }
+
+  const mesh: number[] = [];
+  for (const index of earcut(vertices, holeStarts)) {
+    mesh.push(vertices[index * 2]!, vertices[index * 2 + 1]!);
+  }
+  return mesh;
+}
+
 /** Triangulate one shape and merge the result into convex hulls. */
 function hullsForShape(shape: Shape): {
   hulls: Float32Array[];
@@ -574,12 +607,90 @@ export async function loadGlyphSource(url: string): Promise<GlyphSource> {
     return font;
   }
 
+  /**
+   * Lay a word out and return its contours, centred on their own bounding box.
+   *
+   * Centred rather than sitting on the baseline at the typographic origin: a
+   * body must rotate about something that looks like its middle, or it reads as
+   * swinging from a hinge at its bottom-left corner.
+   */
+  function contoursForWord(
+    word: string,
+    axes: FontAxes,
+    tolerance: number,
+  ): { contours: Contour[]; width: number; height: number } {
+    const font = fontAt(axes);
+    const scale = 1 / font.unitsPerEm;
+    const run = font.layout(word);
+
+    const contours: Contour[] = [];
+    let penX = 0;
+    for (const glyph of run.glyphs) {
+      contours.push(...contoursForGlyph(glyph, penX * scale, scale, tolerance));
+      penX += glyph.advanceWidth;
+    }
+    if (contours.length === 0) return { contours, width: 0, height: 0 };
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const contour of contours) {
+      for (let i = 0; i < contour.points.length; i += 2) {
+        minX = Math.min(minX, contour.points[i]!);
+        maxX = Math.max(maxX, contour.points[i]!);
+        minY = Math.min(minY, contour.points[i + 1]!);
+        maxY = Math.max(maxY, contour.points[i + 1]!);
+      }
+    }
+
+    const centreX = (minX + maxX) / 2;
+    const centreY = (minY + maxY) / 2;
+    for (const contour of contours) {
+      for (let i = 0; i < contour.points.length; i += 2) {
+        contour.points[i] = contour.points[i]! - centreX;
+        contour.points[i + 1] = contour.points[i + 1]! - centreY;
+      }
+    }
+
+    return { contours, width: maxX - minX, height: maxY - minY };
+  }
+
   const geometries = new Map<string, WordGeometry>();
+  const outlines = new Map<string, WordOutline>();
 
   return {
     advanceFor(word: string, axes: FontAxes): number {
       const font = fontAt(axes);
       return font.layout(word).advanceWidth / font.unitsPerEm;
+    },
+
+    outlineFor(
+      word: string,
+      axes: FontAxes,
+      tolerance: number = FLATTEN_TOLERANCE_EM,
+    ): WordOutline {
+      const key = `${axisKey(axes)}|${String(tolerance)}|${word}`;
+      const cached = outlines.get(key);
+      if (cached) return cached;
+
+      const { contours, width, height } = contoursForWord(
+        word,
+        axes,
+        tolerance,
+      );
+      const mesh: number[] = [];
+      for (const shape of groupIntoShapes(contours)) {
+        mesh.push(...trianglesForShape(shape));
+      }
+
+      const outline: WordOutline = {
+        triangles: Float32Array.from(mesh),
+        width,
+        height,
+      };
+      outlines.set(key, outline);
+      return outline;
     },
 
     geometryFor(
@@ -591,56 +702,11 @@ export async function loadGlyphSource(url: string): Promise<GlyphSource> {
       const cached = geometries.get(key);
       if (cached) return cached;
 
-      const font = fontAt(axes);
-      const scale = 1 / font.unitsPerEm;
-      const run = font.layout(word);
-
-      const contours: Contour[] = [];
-      let penX = 0;
-      for (const glyph of run.glyphs) {
-        contours.push(
-          ...contoursForGlyph(glyph, penX * scale, scale, tolerance),
-        );
-        penX += glyph.advanceWidth;
-      }
-
-      // Centre on the bounding box so the body rotates about something that
-      // looks like its middle, rather than about the typographic origin, which
-      // sits on the baseline at the left edge and reads as a hinge.
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const contour of contours) {
-        for (let i = 0; i < contour.points.length; i += 2) {
-          minX = Math.min(minX, contour.points[i]!);
-          maxX = Math.max(maxX, contour.points[i]!);
-          minY = Math.min(minY, contour.points[i + 1]!);
-          maxY = Math.max(maxY, contour.points[i + 1]!);
-        }
-      }
-      if (contours.length === 0) {
-        const empty: WordGeometry = {
-          hulls: [],
-          contours: [],
-          triangles: new Float32Array(0),
-          triangleCount: 0,
-          width: 0,
-          height: 0,
-        };
-        geometries.set(key, empty);
-        return empty;
-      }
-
-      const centreX = (minX + maxX) / 2;
-      const centreY = (minY + maxY) / 2;
-      for (const contour of contours) {
-        for (let i = 0; i < contour.points.length; i += 2) {
-          contour.points[i] = contour.points[i]! - centreX;
-          contour.points[i + 1] = contour.points[i + 1]! - centreY;
-        }
-      }
-
+      const { contours, width, height } = contoursForWord(
+        word,
+        axes,
+        tolerance,
+      );
       const hulls: Float32Array[] = [];
       const mesh: number[] = [];
       let triangleCount = 0;
@@ -656,8 +722,8 @@ export async function loadGlyphSource(url: string): Promise<GlyphSource> {
         contours: contours.map((c) => Float32Array.from(c.points)),
         triangles: Float32Array.from(mesh),
         triangleCount,
-        width: maxX - minX,
-        height: maxY - minY,
+        width,
+        height,
       };
       geometries.set(key, geometry);
       return geometry;
