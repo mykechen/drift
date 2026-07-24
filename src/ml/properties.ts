@@ -10,17 +10,18 @@
  * annotated as such.
  */
 
-import * as ort from "onnxruntime-web/webgpu";
-// The binary is coupled to the entry point above, not chosen freely: the
-// `webgpu` build inlines the Asyncify glue and will only bind against the
-// Asyncify wasm. Pairing it with, say, the JSEP binary loads and then fails
-// deep inside the runtime with a mangled-name TypeError that names neither
-// file. If the ORT entry point changes, this import changes with it.
-import wasmBinaryUrl from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url";
+// The WebAssembly-only build, not the WebGPU one — see `loadPropertyModel`.
+import * as ort from "onnxruntime-web/wasm";
+// The binary is coupled to the entry point above, not chosen freely: each ORT
+// build inlines one specific WebAssembly glue and will only bind against its
+// matching binary. Pairing the `wasm` entry with, say, the Asyncify binary
+// loads and then dies deep inside the runtime with a mangled-name TypeError
+// that names neither file. If the entry point changes, this import changes
+// with it.
+import wasmBinaryUrl from "onnxruntime-web/ort-wasm-simd-threaded.wasm?url";
 import modelUrl from "./models/properties.v1.onnx?url";
 import vocabUrl from "./models/properties.v1.vocab.txt?url";
 import { NEUTRAL_SCORES } from "./fallback";
-import { debug } from "../util/debug";
 
 /** The six axes, in the order the model emits them. Mirrors `AXES` in data.py. */
 export const PROPERTY_AXES = [
@@ -37,7 +38,12 @@ export type PropertyAxis = (typeof PROPERTY_AXES)[number];
 /** Six scores in [-1, 1]. See `model/axes.md` for what each one means. */
 export type PropertyScores = Readonly<Record<PropertyAxis, number>>;
 
-export type InferenceBackend = "webgpu" | "wasm";
+/**
+ * The only execution provider the piece ships. Kept as a named type rather
+ * than inlined because Phase 5's force field is a separate model that gets its
+ * own measurement, and this is where a second entry would go.
+ */
+export type InferenceBackend = "wasm";
 
 export interface PropertyPrediction {
   /** The normalized word the model actually scored, not what was typed. */
@@ -156,56 +162,31 @@ async function loadVocabulary(): Promise<Map<string, number>> {
 }
 
 /**
- * Start a session, preferring WebGPU and falling back to WebAssembly.
- *
- * Both providers can be listed in one call and ONNX Runtime will walk them in
- * order, but doing it by hand means the backend that actually started is known
- * rather than inferred — which the debug page reports and the latency numbers
- * are attributed to.
- */
-async function startSession(
-  modelBytes: ArrayBuffer,
-  preferred: InferenceBackend,
-): Promise<{ session: ort.InferenceSession; backend: InferenceBackend }> {
-  const order: InferenceBackend[] =
-    preferred === "webgpu" ? ["webgpu", "wasm"] : ["wasm"];
-
-  let lastError: unknown;
-  for (const backend of order) {
-    try {
-      const session = await ort.InferenceSession.create(modelBytes, {
-        executionProviders: [backend],
-        graphOptimizationLevel: "all",
-      });
-      return { session, backend };
-    } catch (error) {
-      lastError = error;
-      debug("ml", `${backend} session failed, trying next`, error);
-    }
-  }
-  throw new Error(
-    `Drift: no ONNX backend started. Last error: ${String(lastError)}`,
-  );
-}
-
-export interface LoadOptions {
-  /**
-   * Which backend to try first. WebGPU falls back to WebAssembly on failure;
-   * `wasm` skips the attempt entirely, which the debug page uses to time the
-   * two providers against each other.
-   */
-  readonly backend?: InferenceBackend;
-}
-
-/**
  * Load the model and return a handle that scores words.
+ *
+ * **Why WebAssembly and not WebGPU.** CLAUDE.md originally specified WebGPU
+ * with a WebAssembly fallback. Measured on an Apple Metal-3 adapter over 40
+ * distinct vocabulary words, WebGPU is worse on every axis that matters here:
+ *
+ * | | first run | p50 | p95 | download (brotli) |
+ * |---|---|---|---|---|
+ * | wasm   | 1.0ms  | 0.10ms | 0.20ms | 2.05MB |
+ * | webgpu | 326ms cold, 17.6ms warm | 1.50ms | 2.30ms | 3.28MB |
+ *
+ * Two independent reasons, both structural rather than tunable. A model with
+ * 570k parameters and a batch of one has nothing to parallelise, so per-dispatch
+ * overhead is the entire cost — the GPU is pure latency here. And ONNX Runtime's
+ * WebGPU build requires the 23MB Asyncify binary where the plain build needs
+ * 13MB, so the slower option is also the heavier one. The 326ms cold first run
+ * is the sharpest edge: it lands on the first word of a fresh session.
+ *
+ * Phase 5's force field is a different model with a different shape and gets
+ * measured on its own terms rather than inheriting this conclusion.
  *
  * Throws if the runtime cannot start at all — callers that must not fail should
  * catch and fall back to `NEUTRAL_SCORES`.
  */
-export async function loadPropertyModel(
-  options: LoadOptions = {},
-): Promise<PropertyModel> {
+export async function loadPropertyModel(): Promise<PropertyModel> {
   // Single-threaded on purpose. Multi-threaded WebAssembly needs SharedArrayBuffer,
   // which needs COOP/COEP headers, which would make the page cross-origin
   // isolated for the sake of parallelising a model with 570k parameters. There
@@ -224,10 +205,10 @@ export async function loadPropertyModel(
   }
   const modelBytes = await modelResponse.arrayBuffer();
 
-  const { session, backend } = await startSession(
-    modelBytes,
-    options.backend ?? "webgpu",
-  );
+  const session = await ort.InferenceSession.create(modelBytes, {
+    executionProviders: ["wasm"],
+    graphOptimizationLevel: "all",
+  });
 
   // Reused across every call. A single-word inference allocates nothing beyond
   // the output tensor, which matters when this runs on every keystroke.
@@ -236,6 +217,13 @@ export async function loadPropertyModel(
   const charTensor = new ort.Tensor("int32", charBuffer, [1, MAX_WORD_LENGTH]);
   const wordIdTensor = new ort.Tensor("int32", wordIdBuffer, [1]);
   const feeds = { chars: charTensor, word_id: wordIdTensor };
+
+  // The first run through a fresh session costs ~25ms of one-time kernel setup;
+  // every run after it is ~0.1ms. Spending it here, while the room is still
+  // loading, means the first word someone actually types is not the one that
+  // pays. The result is thrown away — the buffers are zeroed, so this scores
+  // the empty string.
+  await session.run(feeds);
 
   // Insertion-ordered Map as an LRU: re-inserting on a hit moves the entry to
   // the end, so the oldest key is always the first one iteration yields.
@@ -258,7 +246,7 @@ export async function loadPropertyModel(
   }
 
   return {
-    backend,
+    backend: "wasm",
     vocabularySize: vocabulary.size,
 
     peek(raw: string): PropertyPrediction | null {

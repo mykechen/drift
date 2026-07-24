@@ -266,6 +266,189 @@ The dataset grew to 10,750 words in the process (the 8,144 plus the drag-labeled
 orphans and the rescued curated words) once the Gemini balance was topped up.
 `dataset.csv` is re-frozen at that size.
 
-**Still open for Phase 1c:** ONNX export, int8 quantization, and in-browser
-inference under 5ms — the last step before the model can drive anything on
-screen.
+### Phase 1c — getting the model into the browser
+
+The goal was narrow: take the PyTorch checkpoint, make it something a web page
+can run, and prove it still behaves. Three things had to be true at the end —
+the quantized model predicts what the checkpoint predicts, inference fits in
+5ms, and a word can be typed at it.
+
+#### The export is shaped to be boring
+
+The ONNX graph takes two integer tensors and returns one float tensor. Nothing
+else. Turning a word into those integers — lowercasing, stripping trailing
+punctuation, looking the word up in the vocabulary — happens in JavaScript.
+
+That was deliberate. ONNX has string operators, and the lookup could have lived
+inside the graph. But a graph with no string ops is the one that quantizes
+cleanly, runs on every backend, and never surprises you. The cost is that the
+character encoding now exists twice, in `model/data.py` and in
+`src/ml/properties.ts`, and if the two ever disagree the model does not throw —
+it returns some other word's properties. Both copies are commented as mirrors
+of each other for exactly that reason.
+
+The vocabulary ships as a newline-delimited word list rather than the training
+`vocab.json`. Ids are contiguous from 1, so a word's line number *is* its id;
+the JSON was 179KB of punctuation restating an index that position already
+implies, and the list is 83KB. The export script asserts the contiguity instead
+of assuming it, because if that assumption ever broke the failure would be
+silent mismapping rather than a crash.
+
+One small runtime choice: the graph is exported with **int32** inputs even
+though PyTorch trains in int64. ONNX Runtime Web maps int64 tensors onto
+`BigInt64Array`, so every keystroke would allocate and box 25 BigInts. The
+vocabulary is five figures — nowhere near where the wider type earns its keep.
+
+#### Quantization, verified rather than trusted
+
+About 90% of this model's bytes are the word-embedding table. That table is also
+where all of its accuracy lives — a boulder is heavy because that row says so.
+So int8 quantization lands hardest on precisely the part that matters, which
+made it the one step in this phase that could not be taken on faith.
+
+`export_onnx.py` therefore does not just quantize; it scores every candidate
+against the PyTorch checkpoint across all 10,750 dataset words and applies a
+printed selection rule — smallest candidate whose worst single word on any axis
+moves less than 0.05, with zero sign flips among scores above 0.1. Two
+candidates were measured:
+
+| candidate | size | mean delta | max delta | sign flips |
+|---|---|---|---|---|
+| fp32 (export fidelity) | 2.29 MB | 0.00000 | 0.00000 | 0 |
+| int8, embedding + matmul | **0.58 MB** | 0.00346 | 0.02203 | 0 |
+| int8, matmul only | 2.13 MB | 0.00258 | 0.01903 | 0 |
+
+Quantizing the embedding table costs almost nothing — a worst case of 0.022 on
+a scale where the target error is 0.15 — and buys a 4× smaller file. Feel test 1
+is then re-run against the file that actually ships, not the checkpoint it came
+from: the boulder–feather mass gap survives at 1.47 against a floor of 1.0, and
+the script refuses to write the model if it does not.
+
+The threshold matters more than the result. Had int8 blown up the embedding,
+the same script would have selected the matmul-only variant automatically and
+said so. The decision rule was written before the numbers were known.
+
+#### WebGPU lost, and it was not close
+
+`CLAUDE.md` specified ONNX Runtime Web "with WebGPU backend where available,
+WASM fallback." That is the conventional choice and it is wrong here. Measured
+on an Apple Metal-3 adapter over 40 distinct cache-missing vocabulary words:
+
+| backend | first run | p50 | p95 | runtime download (brotli) |
+|---|---|---|---|---|
+| **wasm** | 1.0ms | **0.10ms** | **0.20ms** | **2.05MB** |
+| webgpu | 326ms cold, 17.6ms warm | 1.50ms | 2.30ms | 3.28MB |
+
+WebGPU is 15× slower *and* 1.2MB heavier. Both causes are structural rather
+than tunable. A model with 570k parameters and a batch size of one has nothing
+to parallelise, so per-dispatch overhead is the entire cost — the GPU is pure
+latency here. And ONNX Runtime's WebGPU build requires a 23MB Asyncify
+WebAssembly binary where the plain build needs 13MB, so the slower option is
+also the fatter one.
+
+The 326ms cold first inference is the sharpest edge. It lands on the first word
+a visitor types in a fresh session — the single worst moment in the piece to
+stall. The first symptom of this was not a number at all: driving the debug page
+with WebGPU on, typing seven characters wedged the browser tab hard enough to
+need killing, because seven keystrokes at ~300ms each on a blocked main thread
+is not something a page recovers from gracefully.
+
+The decision was to drop WebGPU entirely and amend the tech stack. Phase 5's
+force field is a different model with a different shape and will be measured on
+its own terms rather than inheriting this conclusion.
+
+**Lesson for the writeup:** "use the GPU backend where available" is a default
+that sounds like performance work and, at this model size, is the opposite of
+it. The measurement took twenty minutes and reversed a locked decision.
+
+#### The failure that named neither file
+
+Wiring ONNX Runtime into Vite produced `TypeError: ke.$b is not a function`
+from inside the minified runtime. Two causes, found in order.
+
+The first was Vite's dependency pre-bundler rewriting ORT's inlined WebAssembly
+glue, fixed by excluding the package from `optimizeDeps`. The second was the
+real one: **the `.wasm` binary is coupled to the ORT entry point you import.**
+`onnxruntime-web/webgpu` binds only against `ort-wasm-simd-threaded.asyncify.wasm`;
+`onnxruntime-web/wasm` binds only against `ort-wasm-simd-threaded.wasm`. Pairing
+the WebGPU entry with the JSEP binary — a reasonable guess, since JSEP is the
+build documented as "with WebGPU" — loads successfully and then dies on a
+mangled internal name that mentions neither file involved.
+
+Worth recording because the error message is actively unhelpful and the
+diagnosis was mechanical once framed correctly: grep each published bundle for
+the `.wasm` filename it actually references.
+
+#### Warming the session
+
+The first inference through a fresh session costs ~25ms of one-time kernel
+setup; every one after it costs ~0.1ms. So the model now runs one throwaway
+inference during load, while the room is still starting. The first word a
+visitor types dropped from 24.6ms to 0.70ms. Nothing about the model changed —
+the cost simply moved to a moment where nobody is waiting on it.
+
+#### Where this leaves the budget
+
+Final numbers on the shipping configuration, 299 distinct cache-missing words:
+p50 **0.10ms**, p95 **0.20ms**, max 0.50ms, against a 5ms budget. A cached word
+returns in 0.001ms with no inference at all. Session ready in ~60ms.
+
+The budget is met by a factor of 25, which is worth stating plainly: it means
+per-keystroke inference is affordable, not just per-commit. The debug page runs
+on every keystroke for that reason — it is heavier than the piece will ever be,
+so if it holds there it holds in the room.
+
+`DESIGN.md` says inference runs "synchronously" on commit. ONNX Runtime's
+`session.run()` is always asynchronous, so that word is now read as *within one
+frame* rather than literally blocking. At 0.1ms with an LRU in front, the
+distinction has no observable consequence — a repeated word never touches the
+session at all.
+
+#### The debug page
+
+`/debug/properties` is built into the deploy, linked from nowhere, `noindex`ed
+and disallowed in `robots.txt`. It shows the six scores as bars centred on zero
+— sign is the whole point of these axes, so absolute magnitude alone would make
+a heavy word and a weightless one look identical — plus which branch answered,
+the latency, and a benchmark button.
+
+Building it into the production deploy rather than keeping it dev-only was a
+deliberate call: the questions it answers are about real hardware, and a tool
+that only runs on the author's laptop cannot answer them.
+
+#### One thing it immediately revealed
+
+Typing nonsense at it contradicted something recorded in Phase 1b. The claim was
+that unknown strings "fall through to neutral-light." They do not, quite:
+
+- `asdf` — mass +0.23, drag +0.28, restitution +0.22, warmth +0.66, intensity +0.48
+- `qwertyuiop` — mass +0.03, drag +0.24, restitution +0.18, warmth +0.59
+
+Drag and restitution do read the way `DESIGN.md` asks for — drifty and
+unstable. But mass is *neutral*, not light, and warmth carries a consistent
+positive bias of around +0.6 that nothing in the brief asks for. The character
+branch is not a light-word generator; it is a mild-word generator with a warm
+tint.
+
+Deferred to Phase 2 rather than fixed. Mass near zero may read perfectly well
+once it is motion on a screen instead of a number in a table, and warmth has no
+visual consequence at all until ink colour is wired in Phase 3. Tuning it now
+would mean tuning against a number rather than against how it looks, which is
+the mistake this project has avoided so far. Recorded here so it is judged
+deliberately rather than discovered late.
+
+#### Also worth noting
+
+- `hello,` and `wait?!` correctly strip to word-branch hits; `h3llo` and `...`
+  are correctly refused. The three refusal rules are the only three
+  `CLAUDE.md` allows.
+- Browser predictions differ from the Python ONNX Runtime by up to ~0.004 on the
+  same int8 model — different kernel implementations for the same graph. Well
+  inside the 0.05 tolerance, but a reminder that "the same model" is not quite
+  the same arithmetic across runtimes.
+- The model and vocabulary are imported through Vite's `?url`, so they land in
+  `/assets/` fingerprinted and Vercel caches them immutably without a
+  `vercel.json` rule. The rule stays for the hand-placed `/public` files.
+
+**Exit criteria met.** Typing any word into the debug page returns six
+believable scores in under 5ms, offline, in the browser.

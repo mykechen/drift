@@ -17,7 +17,6 @@ import {
   PROPERTY_AXES,
   loadPropertyModel,
   normalizeWord,
-  type InferenceBackend,
   type PropertyAxis,
   type PropertyModel,
 } from "../ml/properties";
@@ -52,7 +51,6 @@ const statusEl = required<HTMLParagraphElement>("#status");
 const wordEl = required<HTMLInputElement>("#word");
 const verdictEl = required<HTMLParagraphElement>("#verdict");
 const axesEl = required<HTMLDListElement>("#axes");
-const backendEl = required<HTMLSelectElement>("#backend");
 const runBenchEl = required<HTMLButtonElement>("#run-bench");
 const benchOutputEl = required<HTMLPreElement>("#bench-output");
 
@@ -247,32 +245,20 @@ runBenchEl.addEventListener("click", () => {
     });
 });
 
-async function activate(backend: InferenceBackend): Promise<void> {
-  statusEl.textContent = `starting ${backend}…`;
-  wordEl.disabled = true;
-  runBenchEl.disabled = true;
-  backendEl.disabled = true;
-
-  if (model) {
-    await model.dispose();
-    model = null;
-  }
+async function activate(): Promise<void> {
+  statusEl.textContent = "starting…";
 
   const startedAt = performance.now();
   try {
-    model = await loadPropertyModel({ backend });
+    model = await loadPropertyModel();
   } catch (error) {
     statusEl.textContent = `model failed to load — ${String(error)}`;
-    backendEl.disabled = false;
     return;
   }
   const loadMs = performance.now() - startedAt;
 
-  const requested = backend;
-  const fellBack =
-    model.backend !== requested ? ` (requested ${requested})` : "";
   statusEl.textContent =
-    `properties.v1.onnx · ${model.backend}${fellBack} · ` +
+    `properties.v1.onnx · ${model.backend} · ` +
     `${String(model.vocabularySize)} words in vocabulary · ` +
     `ready in ${loadMs.toFixed(0)}ms`;
 
@@ -280,35 +266,12 @@ async function activate(backend: InferenceBackend): Promise<void> {
 
   wordEl.disabled = false;
   runBenchEl.disabled = false;
-  backendEl.disabled = false;
   wordEl.focus();
   void score(wordEl.value);
 }
-
-backendEl.addEventListener("change", () => {
-  const value = backendEl.value === "wasm" ? "wasm" : "webgpu";
-  benchOutputEl.textContent = "";
-  void activate(value);
-});
-
-/**
- * `?backend=wasm` picks the provider before the first session is ever created.
- *
- * The dropdown can switch afterwards, but only once a session exists — and a
- * provider that hangs rather than failing takes the page down with it, which
- * WebGPU on a software adapter does. Choosing from the URL is the way back in.
- */
-function requestedBackend(): InferenceBackend {
-  return new URLSearchParams(window.location.search).get("backend") === "wasm"
-    ? "wasm"
-    : "webgpu";
-}
-
-const initialBackend = requestedBackend();
-backendEl.value = initialBackend;
 
 void loadVocabularySample().then((sample) => {
   vocabularySample = sample;
   if (window.drift) window.drift.sample = sample;
 });
-void activate(initialBackend);
+void activate();

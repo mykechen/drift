@@ -56,14 +56,14 @@ The floor. Everything else stands on this.
 
 ### 1c. Export and in-browser inference (~3 days)
 
-- [ ] Export to ONNX in `/model/export_onnx.py`.
-- [ ] Quantize to int8. Verify predictions still feel right after quantization.
-- [ ] Set up ONNX Runtime Web in the project. WebGPU backend, WASM fallback.
-- [ ] Build a debug page (`/debug/properties`) that shows scores for any word typed. Ship this internally; do not link publicly.
-- [ ] Measure inference latency. Must be under 5ms on a mid-range laptop.
-- [ ] Add LRU cache keyed by word string, cap at ~5000 entries.
+- [x] Export to ONNX in `/model/export_onnx.py`.
+- [x] Quantize to int8. Verify predictions still feel right after quantization. — 2.29MB → 583KB, max per-word delta 0.022 over all 10,750 words, zero sign flips, boulder–feather mass gap holds at 1.47.
+- [x] Set up ONNX Runtime Web in the project. ~~WebGPU backend, WASM fallback.~~ **WASM only** — WebGPU measured 15× slower and 1.2MB heavier on this model; see the ML runtime entry in `CLAUDE.md`.
+- [x] Build a debug page (`/debug/properties`) that shows scores for any word typed. Ship this internally; do not link publicly. — built into the deploy, `noindex`, disallowed in `robots.txt`, linked from nowhere.
+- [x] Measure inference latency. Must be under 5ms on a mid-range laptop. — p50 0.10ms, p95 0.20ms, max 0.30ms over 299 distinct cache-missing words. 25× inside budget.
+- [x] Add LRU cache keyed by word string, cap at ~5000 entries.
 
-**Exit criteria:** typing any word into the debug page returns 6 believable scores in under 5ms, offline, in the browser.
+**Exit criteria:** typing any word into the debug page returns 6 believable scores in under 5ms, offline, in the browser. — **met.**
 
 ---
 
