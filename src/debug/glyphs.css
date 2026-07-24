@@ -1,0 +1,145 @@
+/*
+ * Internal tool. Shares the paper and ink of the piece so hulls are judged
+ * against the surface they will be drawn on, but nothing here is a design
+ * decision. Hull fills are deliberately garish — this is the one place in the
+ * project where legibility of the debug overlay beats restraint.
+ */
+
+:root {
+  --paper: #f4f0e8;
+  --ink: #1a1817;
+  --accent: #d94f1e;
+  --rule: rgb(26 24 23 / 0.14);
+  --muted: rgb(26 24 23 / 0.5);
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+}
+
+#panel {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 6rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h2 {
+  margin: 0 0 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#status {
+  margin: 0.25rem 0 2rem;
+  color: var(--muted);
+}
+
+#word {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 2rem;
+}
+
+#word:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+
+#axes {
+  display: grid;
+  grid-template-columns: 3rem 1fr 3rem;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  margin: 1.5rem 0;
+  color: var(--muted);
+}
+
+#axes output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+}
+
+#stats {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+#cases {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--rule);
+}
+
+.note {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  max-width: 46rem;
+}
+
+#grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 1rem;
+}
+
+figure {
+  margin: 0;
+}
+
+figcaption {
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+#budget {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--rule);
+}
+
+#budget-output {
+  margin: 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+  font-variant-numeric: tabular-nums;
+}

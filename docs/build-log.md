@@ -452,3 +452,134 @@ deliberately rather than discovered late.
 
 **Exit criteria met.** Typing any word into the debug page returns six
 believable scores in under 5ms, offline, in the browser.
+
+---
+
+## Phase 2 — words as physics bodies
+
+The phase that makes a word a thing. Its exit criterion is feel test 1: typing
+`boulder` and `feather` produces undeniably different physical behaviour.
+
+### Two specs that did not survive contact with reality
+
+Before writing any Phase 2 code, the dependencies and assets it named were
+checked. Two of them did not exist.
+
+**`decomp.js` is not a real package.** `CLAUDE.md` named it as the convex
+decomposition library, described it as "a modern rewrite of poly-decomp with
+better output quality," linked `github.com/pshihn/decomp.js`, and marked it
+**non-negotiable**. The repository 404s and there is no such npm package. The
+project's own spec had hallucinated a dependency and then forbidden deviating
+from it.
+
+`poly-decomp` is real, but it cannot handle holes — which is precisely the
+stated problem, since `DESIGN.md`'s sixth special behaviour is "glyphs with
+holes must decompose correctly or they will misbehave." earcut handles holes
+natively, is about 2KB, and is load-bearing inside Mapbox GL.
+
+**Söhne has no variable axes.** `DESIGN.md` wires `wght` and `opsz` to model
+scores and animates both with a commit spring, and `CLAUDE.md` calls this "the
+word IS the body" and says do not skip it. Klim ships Söhne — including Söhne
+Breit — as static fonts only: eight weights in roman and italic, no `wght`
+axis, no `opsz` axis. A spring animating across eight discrete masters pops
+rather than springs. The centrepiece of the rendering contract could not be
+built as written.
+
+The author's call was to look for a free replacement rather than emulate the
+axes. Verified against the Google Fonts registry rather than from memory, the
+candidates with genuine axes were Archivo (`wght 100–900`, `wdth 62–125`),
+Roboto Flex (everything, but reads as an Android default), Bricolage Grotesque
+(all three axes but no wide setting) and Inter (closest to Söhne, no width
+axis). Archivo won: a grotesque in the same Akzidenz lineage, and its width
+axis is the closest free equivalent to what "Breit" means.
+
+**`opsz` became `wdth` in the process,** and it is a better mapping than the
+original. The stated intent for optical size was "tighter proportional metrics
+= more visually assertive glyph shapes" — which describes width. Width also
+does more work here: an `o` measures 306 units wide at `wdth 62` and 696 at
+`wdth 125` at fixed height, so an intense word becomes a *physically wider
+body*, not merely a differently-drawn one. The axis now changes the collision
+silhouette, which is exactly what "the word IS the body" is supposed to mean.
+
+**Lesson for the writeup:** the specs in this repo were written before the
+tools were checked, and two of them were confidently wrong in ways that would
+have cost days if discovered mid-implementation. Twenty minutes of verifying
+package existence and font metadata, before writing a line, caught both.
+
+### The spike came before the pipeline
+
+Rather than write four hundred lines against assumed APIs, a throwaway page
+answered the questions that could invalidate the whole approach: does fontkit
+run in a browser under Vite, does `getVariation` return real interpolated
+outlines, does Rapier's wasm packaging work without extra Vite plugins. All
+three passed, and the spike also returned three facts that shaped the code:
+
+- **Outlines across axis values are point-compatible** — `o` has exactly 30
+  path commands at both `wght 800/wdth 125` and `wght 300/wdth 62`. That means
+  collision geometry can be interpolated during a commit spring rather than
+  rebuilt, and it means outlines could be baked at a few axis samples at build
+  time if fontkit's 371KB ever needs to leave the runtime bundle.
+- **Archivo is TrueType**, so outlines are quadratics only. No cubics to flatten.
+- **Contour count says nothing about holes.** `i` has two contours and neither
+  is a hole — stem and tittle. `o` has two and the second is. `g` has three.
+  Signed area gives winding, and winding is the only reliable signal: `o`'s
+  contours came back at −301090 and +75371, opposite signs, where `i`'s do not.
+
+The first version of the spike compared the wrong glyphs — glyph index 3 of
+"boulder" is `l`, not `o` — and produced a confident, meaningless "outlines are
+not point-compatible." Worth recording because it was caught only by the number
+looking wrong, not by anything failing.
+
+### The decomposition
+
+Word → fontkit layout → per-glyph outlines at the predicted axis values →
+flatten quadratics → simplify → classify contours by winding → assign each hole
+to the smallest outer contour containing it → earcut → merge triangles into
+convex pieces.
+
+The merge is Hertel–Mehlhorn: repeatedly delete an internal edge shared by two
+pieces when the union stays convex. Not optimal, but within 4× of optimal and
+fast. Rings are stored as vertex *indices* so shared edges are found by index
+pair rather than by comparing floats, which is the kind of thing that works on
+every glyph until it silently doesn't.
+
+Verified by eye at `/debug/glyphs`, which draws hulls as translucent fills over
+the true outline — the only way to check a hull is to look at it. All eight
+counter-bearing glyphs come out hollow, `g` keeps both of its counters, and `i`
+resolves to exactly two pieces.
+
+### The collider budget, and a wrong first guess
+
+At the first working version, `boulder` decomposed to **85 convex hulls**.
+Times the 200-body soft cap, that is 15,475 colliders for the physics step to
+carry, which is not a budget so much as a problem.
+
+The obvious lever was flattening tolerance — coarser curves, fewer reflex
+vertices, bigger convex pieces. Sweeping it proved that wrong: 1/8 em and
+1/64 em produced *identical* triangle counts. The vertex count was never coming
+from curve subdivision. A TrueType outline arrives already dense with points
+that exist for hinting and for smooth rendering, and flattening was barely
+adding to them.
+
+The actual fix was Ramer–Douglas–Peucker simplification of each contour after
+flattening, which made the tolerance a real lever for the first time:
+
+| tolerance | triangles/word | hulls/word | at 200 bodies |
+|---|---|---|---|
+| 1/8 em | 34.0 | 21.0 | 4,200 |
+| 1/16 em | 59.9 | 26.3 | 5,250 |
+| 1/32 em | 92.9 | 47.1 | 9,425 |
+| 1/64 em | 115.9 | 55.9 | 11,175 |
+| 1/128 em | 154.6 | 67.6 | 13,525 |
+
+Left at **1/32 em** for now. At 1/16 the silhouette is visibly faceted — `s`
+loses its spine, `o` becomes a heptagon — and while the SDF renders the true
+curve regardless, a heptagonal `o` rolls differently from a round one. The
+honest position is that this is a *behavioural* question and cannot be settled
+from a static picture, so it stays at the faithful setting until the physics
+stress test has an opinion. The slider is on the debug page; re-tuning is
+seconds.
+
+**Still open for Phase 2:** SDF atlas and shader, the Rapier world and the
+commit pipeline, density-aware timestep, sleep thresholds and angular damping,
+and feel test 1 itself.

@@ -30,6 +30,7 @@ export default defineConfig({
         // excluded in robots.txt. It is here so the shipping model can be
         // exercised on real hardware other than the author's laptop.
         debugProperties: resolve(__dirname, "debug/properties.html"),
+        debugGlyphs: resolve(__dirname, "debug/glyphs.html"),
       },
     },
   },

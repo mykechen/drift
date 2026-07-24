@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Drift — glyphs</title>
+    <script type="module" src="/src/debug/glyphs.ts"></script>
+  </head>
+  <body>
+    <main id="panel">
+      <header>
+        <h1>glyphs</h1>
+        <p id="status" role="status">loading the font…</p>
+      </header>
+
+      <input
+        id="word"
+        type="text"
+        autocomplete="off"
+        autocapitalize="off"
+        autocorrect="off"
+        spellcheck="false"
+        placeholder="type a word"
+        value="boulder"
+        disabled
+      />
+
+      <div id="axes">
+        <label for="wght">wght</label>
+        <input
+          id="wght"
+          type="range"
+          min="100"
+          max="900"
+          step="1"
+          value="500"
+        />
+        <output id="wght-value">500</output>
+
+        <label for="wdth">wdth</label>
+        <input id="wdth" type="range" min="62" max="125" step="1" value="100" />
+        <output id="wdth-value">100</output>
+
+        <label for="tol">tol</label>
+        <input id="tol" type="range" min="3" max="7" step="1" value="5" />
+        <output id="tol-value">1/32 em</output>
+      </div>
+
+      <canvas id="stage" width="1600" height="500"></canvas>
+      <p id="stats"></p>
+
+      <section id="budget">
+        <h2>collider budget</h2>
+        <p class="note">
+          Hulls per word times 200 words is what the physics step carries.
+          Flattening tolerance is the lever: finer curves mean more reflex
+          vertices on the inside of a counter, and a convex piece cannot span
+          one.
+        </p>
+        <pre id="budget-output">measuring…</pre>
+      </section>
+
+      <section id="cases">
+        <h2>failure cases</h2>
+        <p class="note">
+          Every glyph with a counter, plus <code>i</code> — two contours,
+          neither of them a hole. A naive implementation fills the counters or
+          drops the tittle.
+        </p>
+        <div id="grid"></div>
+      </section>
+    </main>
+  </body>
+</html>
