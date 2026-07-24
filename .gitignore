@@ -29,6 +29,15 @@ model/data/*
 # it rebuilds from these two plus the pinned wordfreq version.
 !model/data/curated.txt
 !model/data/blocklist.txt
+# The labeled dataset and its raw per-pass provenance. LLM output is not
+# deterministic, so this cannot be rebuilt identically — it is the frozen
+# artifact Phase 1b trains on, not a regenerable cache. wordlist.csv stays
+# ignored (it rebuilds from curated.txt + wordfreq).
+!model/data/dataset.csv
+!model/data/labels-pass1.jsonl
+!model/data/labels-pass2.jsonl
+!model/data/calib-gemini.jsonl
+!model/data/calibration-words.txt
 model/checkpoints/
 model/.venv/
 __pycache__/
