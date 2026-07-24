@@ -296,11 +296,18 @@ def estimate(pass_number: int, word_count: int, batch_size: int) -> None:
 
 
 def run_pass(pass_number: int, args: argparse.Namespace) -> int:
-    out_path = PASS1_OUT if pass_number == 1 else PASS2_OUT
+    out_path = args.out or (PASS1_OUT if pass_number == 1 else PASS2_OUT)
     done = {row["word"] for row in read_jsonl(out_path)}
 
     if pass_number == 1:
-        pending: list[Any] = [w for w in read_wordlist() if w not in done]
+        corpus = read_wordlist()
+        if args.words_from:
+            corpus = [
+                line.strip().lower()
+                for line in args.words_from.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
+        pending: list[Any] = [w for w in corpus if w not in done]
     else:
         mass_by_word = {row["word"]: row["mass"] for row in read_jsonl(PASS1_OUT)}
         if not mass_by_word:
@@ -387,6 +394,8 @@ def main() -> int:
     parser.add_argument("--model", default=os.environ.get("DRIFT_LABEL_MODEL"))
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--limit", type=int, help="only process this many pending words")
+    parser.add_argument("--words-from", type=Path, help="label this word list instead of the corpus")
+    parser.add_argument("--out", type=Path, help="write to this JSONL instead of the default")
     parser.add_argument("--dry-run", action="store_true", help="print prompt and cost, call nothing")
     parser.add_argument("--full-prompt", action="store_true", help="with --dry-run, print the whole prompt")
     parser.add_argument("--retry-delay", type=float, default=5.0)
