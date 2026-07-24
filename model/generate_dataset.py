@@ -170,6 +170,33 @@ PROVIDERS: dict[str, Callable[[str], Labeler]] = {
 }
 
 
+def list_models(provider: str) -> int:
+    """Print the model ids this key can actually use.
+
+    Model names change faster than this file does, so the right value for
+    --model is whatever your provider currently offers, not something written
+    down here.
+    """
+    if provider == "gemini":
+        from google import genai
+
+        client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
+        for entry in client.models.list():
+            name = getattr(entry, "name", str(entry))
+            actions = getattr(entry, "supported_actions", None)
+            if actions and "generateContent" not in actions:
+                continue
+            # The API returns "models/<id>"; --model wants the bare id.
+            print(name.removeprefix("models/"))
+    else:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
+        for entry in client.models.list():
+            print(f"{entry.id:32} {getattr(entry, 'display_name', '')}")
+    return 0
+
+
 def require_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
@@ -320,6 +347,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--pass", dest="pass_number", type=int, choices=[1, 2])
     parser.add_argument("--merge", action="store_true", help="join both passes into dataset.csv")
+    parser.add_argument("--list-models", action="store_true", help="print model ids this key can use")
     parser.add_argument("--provider", choices=sorted(PROVIDERS), default="gemini")
     parser.add_argument("--model", default=os.environ.get("DRIFT_LABEL_MODEL"))
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
@@ -329,10 +357,12 @@ def main() -> int:
     parser.add_argument("--retry-delay", type=float, default=5.0)
     args = parser.parse_args()
 
+    if args.list_models:
+        return list_models(args.provider)
     if args.merge:
         return merge()
     if not args.pass_number:
-        parser.error("one of --pass or --merge is required")
+        parser.error("one of --pass, --merge or --list-models is required")
     return run_pass(args.pass_number, args)
 
 
