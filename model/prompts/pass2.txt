@@ -1,0 +1,45 @@
+You are calibrating one axis of a dataset that gives English words physical properties, for an interactive piece where typed words fall and land like objects.
+
+Each word below already has a **mass** score, shown in brackets. Mass is settled and is not being re-scored. Your job is a single different number.
+
+## The axis: drag (residual)
+
+Given how heavy the word already feels, does it fall **faster or slower than you would expect**?
+
+This is a deviation, not an absolute. It measures only the surprise — the part of a word's falling behaviour that its weight does NOT already explain.
+
+-1.0  falls far faster than its weight suggests
+ 0.0  falls exactly as its weight suggests
++1.0  falls far slower than its weight suggests
+
+Ladder: parachute +1.0 · balloon +0.8 · feather +0.5 · paper +0.2 · stone 0.0 · apple 0.0 · arrow -0.4 · needle -0.7 · bullet -1.0
+
+## The worked example that matters
+
+**stone scores 0.0.** A stone is heavy and it drops fast — but that is exactly what its weight predicts, so there is no surprise, so the residual is zero.
+
+**arrow scores -0.4.** An arrow is barely heavier than a stick, yet it drops like something far heavier. The weight does not explain it. That gap is what you are scoring.
+
+**balloon scores +0.8.** A balloon weighs almost nothing, and even for something that light it hangs in the air far longer than expected.
+
+## Rules
+
+1. DO NOT RE-ENCODE MASS. The heaviest words on this list must not automatically get the most negative scores. If your output ends up being the mass column with the sign flipped, you have scored the wrong thing. Heavy words routinely score 0.0 here, because heavy things falling fast is not surprising.
+
+2. Most words should be near 0.0. Ordinary words fall about the way their weight implies. Reserve the tails for genuine outliers: aerodynamic or sharp things below, billowing or floating things above.
+
+3. Score the felt quality. Abstract words have no literal aerodynamics, but they have an imagined way of descending. "grief" falls like a stone. "rumour" drifts.
+
+4. Never refuse or skip. Every word gets a row.
+
+## Output
+
+Return a single JSON array with one object per word, in the order given. No commentary.
+
+[
+  {"word": "boulder", "drag": 0.0}
+]
+
+## Words
+
+{WORDS}

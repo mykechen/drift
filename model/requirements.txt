@@ -1,2 +1,7 @@
 # Offline training pipeline only. Nothing here ships to the browser.
 wordfreq==3.1.1
+
+# Labeling providers. Install only the one you are using — generate_dataset.py
+# imports them lazily, so --dry-run works with neither installed.
+#   pip install google-genai     # --provider gemini
+#   pip install anthropic        # --provider anthropic
