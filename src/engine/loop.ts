@@ -9,13 +9,8 @@
 
 import { debug } from "../util/debug";
 
-/**
- * Physics ticks per second. Phase 2 makes this density-aware — 120Hz below 100
- * bodies, 60Hz between 100 and 200 — at which point this becomes a variable.
- */
-export const PHYSICS_HZ = 120;
-
-const FIXED_TIMESTEP_MS = 1000 / PHYSICS_HZ;
+/** Rate used when the caller has no opinion. */
+export const DEFAULT_PHYSICS_HZ = 120;
 
 /**
  * Longest frame delta the accumulator will honour. A backgrounded tab reports
@@ -32,6 +27,16 @@ export interface FrameLoopCallbacks {
    * next step, in the range [0, 1) — the input to render interpolation.
    */
   render(alpha: number): void;
+  /**
+   * Ticks per second for the coming frame, sampled once per frame rather than
+   * per step so the rate cannot change midway through catching up.
+   *
+   * DESIGN.md makes this density-aware — 120Hz below 100 bodies, 60Hz above —
+   * and requires the switch be imperceptible. It is, because the timestep is
+   * fixed *within* a frame: a step is always a whole step, and only how many
+   * of them fit in a frame changes.
+   */
+  physicsHz?(): number;
 }
 
 export interface FrameLoop {
@@ -53,12 +58,14 @@ export function createFrameLoop(callbacks: FrameLoopCallbacks): FrameLoop {
     previousTimeMs = nowMs;
     accumulatorMs += deltaMs;
 
-    while (accumulatorMs >= FIXED_TIMESTEP_MS) {
-      callbacks.step(FIXED_TIMESTEP_MS);
-      accumulatorMs -= FIXED_TIMESTEP_MS;
+    const timestepMs = 1000 / (callbacks.physicsHz?.() ?? DEFAULT_PHYSICS_HZ);
+
+    while (accumulatorMs >= timestepMs) {
+      callbacks.step(timestepMs);
+      accumulatorMs -= timestepMs;
     }
 
-    callbacks.render(accumulatorMs / FIXED_TIMESTEP_MS);
+    callbacks.render(accumulatorMs / timestepMs);
   }
 
   function start(): void {
@@ -67,7 +74,7 @@ export function createFrameLoop(callbacks: FrameLoopCallbacks): FrameLoop {
     previousTimeMs = performance.now();
     accumulatorMs = 0;
     animationFrameId = requestAnimationFrame(frame);
-    debug("loop", "start", `${PHYSICS_HZ}Hz`);
+    debug("loop", "start");
   }
 
   function stop(): void {

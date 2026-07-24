@@ -1,9 +1,46 @@
-import { Color, Renderer, Transform } from "ogl";
-import { BACKGROUND } from "../design/palette";
+import { Color, Geometry, Mesh, Program, Renderer, Transform } from "ogl";
+import { BACKGROUND, INK } from "../design/palette";
+import type { WordBody } from "./physics";
 import { debug } from "../util/debug";
 
 /** Retina is worth paying for; 3× displays are not. */
 const MAX_DEVICE_PIXEL_RATIO = 2;
+
+/**
+ * Flat fill of the word's own triangulation.
+ *
+ * Deliberately not the final rendering — Phase 3 replaces this with an SDF that
+ * draws the true curves. Until then the word is drawn from exactly the
+ * tessellation its colliders were cut from, which means the picture cannot
+ * disagree with the simulation. A counter that looks filled *is* filled.
+ */
+const VERTEX_SHADER = /* glsl */ `
+  attribute vec2 position;
+
+  uniform vec2 uTranslation;
+  uniform float uRotation;
+  uniform float uScale;
+  uniform vec2 uRoomHalfExtent;
+
+  void main() {
+    float s = sin(uRotation);
+    float c = cos(uRotation);
+    vec2 scaled = position * uScale;
+    vec2 rotated = vec2(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
+    vec2 world = rotated + uTranslation;
+    gl_Position = vec4(world / uRoomHalfExtent, 0.0, 1.0);
+  }
+`;
+
+const FRAGMENT_SHADER = /* glsl */ `
+  precision mediump float;
+  uniform vec3 uInk;
+  uniform float uAlpha;
+
+  void main() {
+    gl_FragColor = vec4(uInk, uAlpha);
+  }
+`;
 
 /**
  * Members are typed as function properties rather than methods because they are
@@ -11,31 +48,48 @@ const MAX_DEVICE_PIXEL_RATIO = 2;
  * listeners.
  */
 export interface RoomRenderer {
-  /** Root of the scene graph. Word bodies are attached here from Phase 2. */
+  /** Root of the scene graph. */
   readonly scene: Transform;
+  /** Canvas width divided by height, for the physics room's proportions. */
+  readonly aspect: () => number;
+  /** Give a committed body a mesh built from its own triangulation. */
+  readonly attach: (body: WordBody) => void;
+  /** Drop every mesh. */
+  readonly detachAll: () => void;
   /** Re-reads the canvas's CSS size and resizes the drawing buffer to match. */
   readonly resize: () => void;
-  readonly render: () => void;
+  /**
+   * Draw one frame. Body transforms are read here rather than pushed on every
+   * step, because the simulation may take several steps between frames and only
+   * the last one is ever seen.
+   */
+  readonly render: (
+    bodies: readonly WordBody[],
+    roomHalfWidth: number,
+    roomHalfHeight: number,
+    wordScale: number,
+  ) => void;
 }
 
-/**
- * Creates the WebGL renderer for the room. Phase 0 draws nothing but the
- * background — the scene graph is empty until words become bodies.
- */
+/** Creates the WebGL renderer for the room. */
 export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   const renderer = new Renderer({
     canvas,
     dpr: Math.min(window.devicePixelRatio, MAX_DEVICE_PIXEL_RATIO),
-    // The room is opaque paper, and 2D — no alpha or depth buffer needed.
+    // The room is opaque paper, and 2D — no depth buffer needed. Alpha is on so
+    // a word can fade when it ages out.
     alpha: false,
     depth: false,
     antialias: true,
   });
+  const gl = renderer.gl;
 
   const background = new Color(BACKGROUND);
-  renderer.gl.clearColor(background.r, background.g, background.b, 1);
+  gl.clearColor(background.r, background.g, background.b, 1);
 
   const scene = new Transform();
+  const ink = new Color(INK);
+  const meshes = new Map<number, Mesh>();
 
   /**
    * OGL's `setSize` writes inline `width`/`height` pixel styles onto the canvas
@@ -63,11 +117,76 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     debug("render", "resize", width, height, `dpr=${renderer.dpr}`);
   }
 
-  function render(): void {
-    renderer.render({ scene });
+  function attach(body: WordBody): void {
+    const positions = body.geometry.triangles;
+    if (positions.length === 0) return;
+
+    const mesh = new Mesh(gl, {
+      geometry: new Geometry(gl, {
+        position: { size: 2, data: positions },
+      }),
+      program: new Program(gl, {
+        vertex: VERTEX_SHADER,
+        fragment: FRAGMENT_SHADER,
+        transparent: true,
+        cullFace: false,
+        uniforms: {
+          uTranslation: { value: [0, 0] },
+          uRotation: { value: 0 },
+          // Set per frame from the room's own scale, so the mesh's em units
+          // land at the same size the colliders were built at.
+          uScale: { value: 1 },
+          uRoomHalfExtent: { value: [1, 1] },
+          uInk: { value: [ink.r, ink.g, ink.b] },
+          uAlpha: { value: 1 },
+        },
+      }),
+    });
+    mesh.setParent(scene);
+    meshes.set(body.id, mesh);
   }
 
+  function detachAll(): void {
+    for (const mesh of meshes.values()) mesh.setParent(null);
+    meshes.clear();
+  }
+
+  // Before anything reads the canvas. The Renderer constructor writes a 300x150
+  // inline size onto the element, and until that is cleared `clientWidth` and
+  // `clientHeight` report it rather than the CSS box — which silently sizes the
+  // drawing buffer *and* the physics room's aspect ratio to 2:1. This same
+  // omission cost a debugging session in Phase 0; it is one call and it belongs
+  // here, not at the call site.
   resize();
 
-  return { scene, resize, render };
+  return {
+    scene,
+    aspect: (): number => canvas.clientWidth / Math.max(canvas.clientHeight, 1),
+    attach,
+    detachAll,
+    resize,
+    render(
+      bodies: readonly WordBody[],
+      roomHalfWidth: number,
+      roomHalfHeight: number,
+      wordScale: number,
+    ): void {
+      for (const body of bodies) {
+        const mesh = meshes.get(body.id);
+        if (!mesh) continue;
+        const uniforms = mesh.program.uniforms;
+        (uniforms["uTranslation"] as { value: number[] }).value = [
+          body.x,
+          body.y,
+        ];
+        (uniforms["uRotation"] as { value: number }).value = body.rotation;
+        (uniforms["uScale"] as { value: number }).value = wordScale;
+        (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
+          roomHalfWidth,
+          roomHalfHeight,
+        ];
+      }
+      renderer.render({ scene });
+    },
+  };
 }

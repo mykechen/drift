@@ -56,6 +56,15 @@ export interface WordGeometry {
   readonly hulls: readonly Float32Array[];
   /** Closed contours for debug drawing and SDF generation. Same units. */
   readonly contours: readonly Float32Array[];
+  /**
+   * The triangulation, as flat `[x, y]` pairs, three vertices per triangle.
+   *
+   * This is what draws the word until the SDF lands. Drawing the same
+   * tessellation the colliders came from means the picture cannot disagree
+   * with the physics — if a counter is filled on screen it is filled in the
+   * simulation too, which is worth more during Phase 2 than smooth curves.
+   */
+  readonly triangles: Float32Array;
   /** Triangles earcut produced before convex merging. Diagnostic only. */
   readonly triangleCount: number;
   /** Bounding box of the whole word, em units. */
@@ -494,6 +503,7 @@ function mergeIntoConvexPieces(
 function hullsForShape(shape: Shape): {
   hulls: Float32Array[];
   triangles: number;
+  mesh: number[];
 } {
   const vertices: number[] = [...shape.outer.points];
   const holeStarts: number[] = [];
@@ -503,7 +513,12 @@ function hullsForShape(shape: Shape): {
   }
 
   const triangles = earcut(vertices, holeStarts);
-  if (triangles.length === 0) return { hulls: [], triangles: 0 };
+  if (triangles.length === 0) return { hulls: [], triangles: 0, mesh: [] };
+
+  const mesh: number[] = [];
+  for (const index of triangles) {
+    mesh.push(vertices[index * 2]!, vertices[index * 2 + 1]!);
+  }
 
   const hulls = mergeIntoConvexPieces(vertices, triangles).map((ring) => {
     const out = new Float32Array(ring.length * 2);
@@ -513,7 +528,7 @@ function hullsForShape(shape: Shape): {
     }
     return out;
   });
-  return { hulls, triangles: triangles.length / 3 };
+  return { hulls, triangles: triangles.length / 3, mesh };
 }
 
 // --- Source -----------------------------------------------------------------
@@ -608,6 +623,7 @@ export async function loadGlyphSource(url: string): Promise<GlyphSource> {
         const empty: WordGeometry = {
           hulls: [],
           contours: [],
+          triangles: new Float32Array(0),
           triangleCount: 0,
           width: 0,
           height: 0,
@@ -626,16 +642,19 @@ export async function loadGlyphSource(url: string): Promise<GlyphSource> {
       }
 
       const hulls: Float32Array[] = [];
+      const mesh: number[] = [];
       let triangleCount = 0;
       for (const shape of groupIntoShapes(contours)) {
         const decomposed = hullsForShape(shape);
         hulls.push(...decomposed.hulls);
+        mesh.push(...decomposed.mesh);
         triangleCount += decomposed.triangles;
       }
 
       const geometry: WordGeometry = {
         hulls,
         contours: contours.map((c) => Float32Array.from(c.points)),
+        triangles: Float32Array.from(mesh),
         triangleCount,
         width: maxX - minX,
         height: maxY - minY,

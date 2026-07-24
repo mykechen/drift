@@ -583,3 +583,103 @@ seconds.
 **Still open for Phase 2:** SDF atlas and shader, the Rapier world and the
 commit pipeline, density-aware timestep, sleep thresholds and angular damping,
 and feel test 1 itself.
+
+### Phase 2 — the physics, and what the stress test found
+
+ROADMAP lists SDF rendering before physics. That order was inverted deliberately:
+physics is what answers the open questions — the flattening tolerance, the
+collider budget, whether feel test 1 passes at all — and the SDF is polish on
+top of something that has to behave first. Building the shiny rendering before
+the thing it renders is exactly the risk ROADMAP warns about elsewhere.
+
+Words are drawn, for now, as flat fills of *the same triangulation the colliders
+were cut from*. That is not laziness: it makes it impossible for the picture to
+disagree with the simulation. If a counter looks filled on screen, it is filled
+in the physics too.
+
+#### Feel test 1 passes, and the trace shows why
+
+Committed at the room's centre and traced at 100ms intervals:
+
+- **boulder** — mass +0.87, damping 0.20: −0.17, −1.27, −3.15, −4.67. Accelerating
+  hard, floor in about a second.
+- **feather** — mass −0.60, drag +0.48, damping 1.05: −0.16, −0.84, −1.67, −2.59,
+  −3.51, −4.47. Almost perfectly *linear* — terminal velocity — reaching the
+  floor in roughly twice the time.
+
+The difference is not only speed but the *shape* of the fall, which is the part
+that reads as weight. It required modelling the right thing: under gravity alone
+every body accelerates identically regardless of mass, so mass cannot separate
+them. What separates a feather from a boulder in air is drag relative to weight,
+so linear damping is driven mostly by how light the word is and then adjusted by
+the `drag` axis — which the dataset already defines as a residual, *how much
+faster or slower this word falls than its weight alone predicts*. The axis
+designed in Phase 1a turned out to be exactly the quantity the physics needed.
+
+#### A Rapier API whose type signature is a lie
+
+One word, `scream`, threw `Error: expected instance of lA` on commit. Every
+time; no other word did.
+
+`ColliderDesc.convexHull(points)` is typed `ColliderDesc | null`, which reads as
+"returns null if the hull cannot be built." It does not. It only stores the
+vertices — the hull is actually computed later, inside `world.createCollider`,
+and a degenerate point set makes *that* throw out of wasm-bindgen with a message
+naming neither the collider nor the word nor anything else recognisable. The
+null check written against the type signature was dead code from the start.
+
+The culprit was hull 50 of 51: a four-point sliver of area 8.45e-4 em², below
+Rapier's internal hull epsilon. The fix is a try/catch around collider creation
+that skips the offending piece and logs its point count and area, so one
+unusable sliver costs a sliver of silhouette rather than the entire word.
+
+#### The stress test, and a number that was measuring the wrong thing
+
+The first run committed 200 words as fast as possible and reported a step cost
+of **1550ms** against a 16.7ms budget. That number was worthless: 200 words
+spawned at the same point in 171ms is one enormous interpenetrating pile, a
+state no amount of typing can produce.
+
+Re-run at 110ms between commits — faster than anyone types, but with time to
+fall — it came back at **72ms**. Still 4× over budget, and with a far more
+alarming detail: at every checkpoint, *every* body was awake. 50 of 50, 97 of
+100, 150 of 150, 200 of 200. Nothing ever slept.
+
+The cause was geometric. A word at the original scale is about 3.1 × 0.66 world
+units, so 200 of them ask for roughly 400 square units of bounding box in a room
+that has 134. The room could not hold its own soft cap. An overflowing pile stays
+permanently pressurised, every body grinding against its neighbours, and nothing
+ever comes to rest. Sizing words so 200 genuinely fit — a scale factor of 0.4
+instead of 0.9 — dropped the step cost to **17.7ms** and left the pile topping
+out at y = 1.25 in a room whose ceiling is 5.
+
+**Lesson for the writeup:** the soft cap is not a rendering decision or an
+aesthetic one. "200 words" is a constraint on how big a word is allowed to be,
+and getting it wrong shows up as a physics performance problem three layers away
+from the number that caused it.
+
+#### The open problem: island sleeping
+
+Sleep works in normal use — `boulder` and `feather` both settle and sleep within
+a second of landing, and a room of twelve words goes fully quiet. It fails only
+in the full 200-word pile, and the measurements say why.
+
+After the room settles, 194 of 200 bodies are moving *slower* than the sleep
+threshold — median speed 0.0096 against a limit of 0.06 — and 198 are below the
+angular limit. They are still. They just do not sleep.
+
+The reason is that Rapier's sleeping is **island-based**: bodies in a connected
+contact island sleep together or not at all, so a handful of restless bodies keep
+two hundred awake, and calling `sleep()` on individual bodies cannot hold against
+it. Rapier's own thresholds would resolve this, but the JavaScript bindings
+expose only `canSleep`, `setSleeping`, `sleep()` and `isSleeping()` —
+`linear_threshold`, `angular_threshold` and `time_until_sleep` are not reachable
+from JS at all.
+
+Recorded rather than papered over. At 200 bodies with everything awake the step
+costs 17.7ms against a 16.7ms budget — marginal, and it collapses the moment
+sleeping works.
+
+**Still open for Phase 2:** island sleeping, the SDF atlas and shader, and
+re-testing the flattening tolerance now that there is behaviour to judge it
+against.
