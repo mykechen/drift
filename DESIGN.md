@@ -74,7 +74,9 @@ Everything is a spring. Nothing is linear. Nothing is instant.
 - **Word fade (aging out when room is full):** 2s ease-out, opacity + slight upward drift + weight tapering to 300 as it goes. Read: the word is being forgotten, not deleted.
 - **Whole-scene fade (clear command):** 1.5s, all bodies fade in staggered ~30ms apart so the last words to fade are the newest — visual echo of the accumulation order in reverse.
 
-No parallax. No scroll-triggered anything. Nothing follows the mouse cursor (there is no mouse cursor to follow; the only cursor is the text caret).
+No parallax. No scroll-triggered anything.
+
+> **Changed in Phase 2.** This section originally read "Nothing follows the mouse cursor (there is no mouse cursor to follow; the only cursor is the text caret)." The text caret now follows the mouse horizontally — see Camera and framing. The point it protected still holds: nothing in the *scene* parallaxes or drifts with the pointer, and there is no hover state. The mouse only aims where the next word lands.
 
 ---
 
@@ -84,8 +86,9 @@ No parallax. No scroll-triggered anything. Nothing follows the mouse cursor (the
 - **Fixed camera.** No pan, no zoom, no shake, no anything.
 - **Frame IS the room.** No drawn floor, no drawn walls. Words settle against the bottom edge of the canvas. The frame boundaries are the physics boundaries. Left and right walls are the canvas edges. Top has no wall — new words spawn just above the top edge and fall in.
 - **Aspect ratio:** viewport, but with a minimum 4:3 and maximum 16:9. Enforce via CSS on the canvas element.
-- **Text cursor position:** vertically centered, horizontally centered. Fixed. New words appear here and are then released into the room.
-- **Safe zone around cursor:** a small circular region around the text cursor where physics bodies cannot settle. Prevents new words from spawning inside an existing pile.
+- **Text cursor position:** vertically fixed at the room's centre height; **horizontally it follows the mouse**. The word being typed forms at the cursor, and on commit it is released from there and falls — so a word lands in the column you aimed at. This is how the room is composed: you place words across the floor by moving the cursor between them.
+  - > **Changed in Phase 2.** Originally the cursor was "horizontally centered. Fixed." That made every word spawn at x=0 and stack in a single column. Harmless while rotation was locked (rigid words balance in a tower), but once words rotate freely a 1-D tower is unstable and never settles. A movable cursor gives the pile the horizontal spread it needs *and* turns placement into the composition mechanic. Cursor x is clamped so a word cannot spawn half-off the frame.
+- **Safe zone around cursor:** a small circular region around the text cursor where physics bodies cannot settle. Prevents new words from spawning inside an existing pile. *(Not yet implemented; with a movable cursor the visitor can already place words onto empty floor, so this is lower priority than when the cursor was fixed.)*
 
 ---
 

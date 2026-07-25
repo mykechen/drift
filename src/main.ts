@@ -56,6 +56,26 @@ window.addEventListener("resize", (): void => {
 });
 
 /**
+ * The cursor's horizontal position in world units — where the next word forms
+ * and lands. It follows the mouse in x only, clamped so a word cannot spawn
+ * half-off the frame. DESIGN.md's original centred, fixed cursor was changed
+ * here: placing words is how the room is composed and how the pile gets the
+ * horizontal spread it needs to settle.
+ */
+const CURSOR_EDGE_MARGIN_UNITS = 0.5;
+let cursorX = 0;
+window.addEventListener("mousemove", (event: MouseEvent): void => {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const fraction = (event.clientX - rect.left) / rect.width;
+  const limit = Math.max(0, room.roomWidth / 2 - CURSOR_EDGE_MARGIN_UNITS);
+  cursorX = Math.max(
+    -limit,
+    Math.min(limit, (fraction - 0.5) * room.roomWidth),
+  );
+});
+
+/**
  * Commit one word: score it, render it at the axes its scores imply, cut it
  * into hulls, and drop it in.
  *
@@ -68,13 +88,14 @@ async function commitWord(
   glyphSource: GlyphSource,
   physics: PhysicsRoom,
   raw: string,
+  spawnX: number,
 ): Promise<void> {
   const prediction = model ? await model.predict(raw) : null;
   const scores = prediction?.scores ?? NEUTRAL_SCORES;
   const word = prediction?.word ?? raw.toLowerCase();
 
   const geometry = glyphSource.geometryFor(word, axesForScores(scores));
-  const body = physics.commit(word, geometry, scores);
+  const body = physics.commit(word, geometry, scores, spawnX);
   if (!body) return;
 
   renderer.attach(body);
@@ -94,7 +115,7 @@ attachWordInput(window, {
     // Cleared here rather than after inference resolves, so the draft does not
     // linger for a frame on top of the body that replaces it.
     renderer.setDraft(null);
-    void commitWord(properties, glyphs, room, word);
+    void commitWord(properties, glyphs, room, word, cursorX);
   },
 });
 
@@ -109,6 +130,7 @@ const loop = createFrameLoop({
       room.roomWidth / 2,
       room.roomHeight / 2,
       WORD_EM_UNITS,
+      cursorX,
     );
   },
 });
@@ -129,6 +151,7 @@ if (import.meta.env.DEV) {
     glyphs,
     properties,
     renderer,
-    commit: (word: string) => commitWord(properties, glyphs, room, word),
+    commit: (word: string, spawnX = cursorX) =>
+      commitWord(properties, glyphs, room, word, spawnX),
   };
 }

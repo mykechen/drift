@@ -850,3 +850,102 @@ Phase 5's semantic gravity spread words horizontally — and the after-still's
 central blob is that spawn column, not a rotation artifact. Recorded so the
 column is judged as the spawn problem it is, not mistaken for a regression in
 this change.
+
+### Phase 2 — the lock comes off: a physics lifecycle, and the spawn column bites
+
+The lock shipped, and the author's reaction was the right one: the settled room
+felt *dead*. A locked word never reacts to a shove — it cannot tumble on impact
+or shift when something lands on it — and for a piece built on "the word IS the
+body," rigid tiles are the wrong answer. Two more asks arrived alongside: make
+the physics mechanics *obvious* (a heavy word should visibly plummet, a `ball`
+should bounce where a `rock` thuds), and let the settled pile *react* when a
+heavy word drops onto it. This entry is that whole pass, and the useful part is
+how much the freeze mechanism fought back.
+
+**Bounce and fall were already in the model; the physics layer was hiding them.**
+The property model scores `ball` restitution +0.79 and `rock` −0.25 — exactly
+right — but a measured drop showed `ball` rebounding 0.014 units and *less* than
+`rock`. Three causes, each fixed: the floor had no restitution and Rapier
+averages contact surfaces, halving every bounce toward the dead floor (fixed by
+combining restitution by **max** on word colliders); the cap compressed the top
+(`MAX_RESTITUTION` 0.55 → 0.72); and the mapping ran the full −1..+1 range, so
+`rock` still had a little bounce (now positives-only, so anything clay-to-neutral
+hard-stops at 0 and only positive scores rebound). Result: `rubber` hops five
+times, `ball` twice, `rock`/`boulder`/`anchor` land dead — the ordering the model
+always intended. Fall contrast was widened the honest way: the heavy end is
+already near free-fall, so `MAX_LINEAR_DAMPING` was raised 3.2 → 5.4 to make the
+*light* end drift slower, taking the boulder/feather gap from ~1.8× to ~2.7×
+(950ms vs 2600ms) without a mass-scaled-gravity hack.
+
+**Rotation became a lifecycle instead of a lock.** A word now rotates freely
+under real physics while it moves (tumble on impact), and once it slows below
+`ORIENT_ACTIVE_SPEED` a mass-scaled restoring torque eases it upright, with a
+deadband so a nearly-upright word is left alone. This is the restoring-torque
+approach the earlier freeze work explicitly rejected — and it rejected it for a
+real reason, which came due immediately.
+
+**The freeze fight, in the order it happened.** Every step here was measured, and
+three of the four things tried made it worse before the fix landed:
+
+- *The torque kept the pile awake.* A 72-word heap froze only 4 of 72 and never
+  went quiet. The freeze condition required angular stillness, and any word the
+  torque was still righting had angular velocity — so it never froze. Widening
+  the deadband from 3° to 28° barely helped (10/72).
+- *Wake-on-impact was re-waking the pile from the inside.* Disabling it jumped
+  freezing to 66/72 — the churn was a wake event triggering movement triggering
+  another wake event. That named the real culprit.
+- *The freeze condition was the lever.* Keying freeze on **linear** stillness
+  alone — a word that has stopped *moving* is settled, even if the torque is
+  still turning it — reached 72/72, and freed the torque to be *strong* (gain
+  0.11) since it no longer blocks freezing. Median tilt settled at ~7–10°, a
+  readable, organic lean rather than the lock's pristine 3.5°.
+- *The wake threshold was measuring the wrong thing.* A force threshold could not
+  tell a hard landing from dead weight: a heavy word's *resting* load on the word
+  beneath it (measured: frozen pile ~0 internal force, light landing ~17, heavy
+  ~640, heavy *resting* well above the 80 tried) re-woke its neighbour every
+  step. The gate had to be the striker's **velocity** (> 2 units/s), which is
+  immune to resting load and also damps the cascade, since a knocked word
+  re-settles too slowly to re-trigger anything. With that, a 50-word room freezes
+  in ~7s and re-freezes ~2.5s after a disturbance.
+- *A single woken word is pinned and does nothing.* The struck word is boxed in
+  by the pile, so waking only it produced a 0.04-unit twitch. Waking a small
+  **radius** (1.3 units) of frozen neighbours gives a visible local *give* —
+  measured 0.175-unit shifts, up to 12 words moving at once — that still
+  re-freezes almost immediately. Bounded because the woken cluster re-settles
+  below the wake speed.
+
+**Then free rotation exposed the spawn column as a hard blocker, not an eyesore.**
+Everything above still would not settle at x=0. A 1-D tower of *freely-rotating*
+rounded words is an inverted pendulum — it rocks forever and never freezes. The
+lock had hidden this: rigid tiles balance in an impossible tower. Confirmed by
+giving words a horizontal spread: the same pile that never froze at x=0 froze
+120/120 in ~9s once it was a 2-D heap. So free rotation *forces* the spawn
+question that Phase 5 was going to answer later.
+
+**The author's answer reshaped the interaction: words land where the cursor is.**
+Rather than auto-spreading, the cursor now follows the mouse horizontally, the
+word forms there, and on commit it is released from that column and falls.
+Placement becomes the composition mechanic and hands the pile its 2-D spread for
+free. This overrides DESIGN.md's fixed, centred cursor and its "nothing follows
+the mouse" line — both amended, with the reasoning, rather than left to
+contradict the build. `commit` now takes a spawn x; the renderer draws the draft
+at the cursor; a clamped mouse→world mapping drives both. Verified end to end
+through the real event path: mouse at 80% of the canvas → word committed at world
+x = 4.0, the expected column.
+
+The composition this produces (`docs/images/physics-cursor-placed.png`) is the
+first time the room has looked like the piece — placed stacks of legible words
+spread across the floor, leaning slightly where they settled, a heavy `boulder`
+sitting where it was dropped. Median tilt ~10° at 120 words placed in clusters,
+max ~83° for the odd word buried in the densest spot; it reads, cold, as a
+composition rather than a jumble or a blob.
+
+**Two honest edges, flagged not hidden.** Readability is looser than the lock
+(median ~10° vs 3.5°, and a thin tail past 30° in dense clusters) — the
+deliberate cost of aliveness, and the author's call on feel test 4. And the
+absolute step-budget number was again not cleanly re-measurable through the
+throttled Playwright driver; the state results (freeze convergence, wake
+bounded-ness, re-freeze times) are throttle-immune and hold, but the p50 step
+cost wants a foreground-Chrome reading before this is called done against the
+16.7ms budget. Everything else — bounce ordering, fall ratio, rotation
+convergence, wake give-and-re-freeze, cursor placement — is verified.

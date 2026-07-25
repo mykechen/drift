@@ -77,52 +77,113 @@ const DENSITY_AT_HEAVIEST = 3;
  * driven mostly by how light the word is, adjusted by the `drag` axis, which is
  * defined as a residual — how much faster or slower this word falls than its
  * weight alone predicts.
+ *
+ * The heavy end is already near free-fall (damping ≈ 0), so "heavier falls a lot
+ * faster" cannot be bought by dropping boulders harder — they are already at the
+ * floor of the range. The contrast is widened from the *light* end instead: a
+ * bigger `MAX_LINEAR_DAMPING` makes a feather drift slower and longer, which
+ * grows the ratio between the fastest and slowest word without breaking the
+ * Galileo-honest model into a mass-scaled-gravity hack. Raised from 3.2 when the
+ * boulder/feather gap read as real but not obvious.
  */
 const MIN_LINEAR_DAMPING = 0;
-const MAX_LINEAR_DAMPING = 3.2;
+const MAX_LINEAR_DAMPING = 5.4;
 
 /** How much the drag residual can pull resistance away from what mass sets. */
 const DRAG_RESIDUAL_INFLUENCE = 0.45;
 
 /**
- * Rotation is locked and each word is committed at a small fixed tilt instead of
- * being left free to spin.
+ * Rotation: words tumble freely, then right themselves as they settle.
  *
- * CLAUDE.md asks for words that "tumble slightly and settle flat," and DESIGN.md
- * feel test 4 judges the settled room as a composition. Free rotation with only
- * angular damping failed that test badly: a settled 200-word room measured a
- * median tilt near 69° with 80 of 200 words past 90° — sideways to upside down —
- * and the words that still read as *language* were exactly the near-upright few.
- * For a piece whose premise is a room that accumulates language, a jumble where
- * half the words are unreadable is the wrong failure.
+ * The first fix for the settling-flat problem locked rotation outright and
+ * committed each word at a fixed tilt. It guaranteed readability but killed all
+ * rotational life — a locked word never reacts to a shove, which read as rigid
+ * and static and undercut "the word IS the body." This replaces the lock with a
+ * lifecycle: a word rotates freely under real physics while it is moving (tumble
+ * on impact), and once it slows a gentle restoring torque eases it upright.
  *
- * Angular damping alone cannot guarantee this — where a word settles depends on
- * how it lands and what it lands on. A restoring torque could, but it fights the
- * freeze mechanism (see the freeze constants): any torque applied every step
- * keeps bodies awake and a full room then never freezes and goes over budget.
- * Locking rotation sidesteps that entirely — there is no angular degree of
- * freedom to damp, keep awake, or pay for in the solver.
- *
- * The small tilt is what keeps a locked pile from reading as mechanically
- * uniform bricks. It is *deterministic*, derived from the word's commit index,
- * so that DESIGN.md's session-replay URL reproduces the same composition rather
- * than re-randomising the tilt of every word on replay.
+ * The torque is what the freeze section warned against — applied blindly every
+ * step it keeps bodies awake and a full room never freezes. Two things keep it
+ * safe. It only acts once a word has *slowed* (`ORIENT_ACTIVE_SPEED`), so a
+ * word in flight still tumbles. And it has a deadband (`ORIENT_DEADBAND`): inside
+ * it the torque is zero, so a righted word goes still and freezes normally. A
+ * buried word that physically cannot rotate has its torque cancelled by contacts,
+ * so its angular velocity stays near zero and it freezes at whatever angle it
+ * wedged — which is fine, because buried words are not read anyway. Being a
+ * torque rather than a hard `setAngvel`, it respects neighbours instead of
+ * clipping through them.
  */
-const MAX_COMMIT_TILT_RADIANS = (7 * Math.PI) / 180;
+const ANGULAR_DAMPING = 3.2;
+
+/** Below this linear speed a word is "settling" and the righting torque acts. */
+const ORIENT_ACTIVE_SPEED = 1.6;
+
+/** Within this angle of upright, no righting torque — the word is readable. */
+const ORIENT_DEADBAND = (8 * Math.PI) / 180;
 
 /**
- * A stable pseudo-random tilt in ±`MAX_COMMIT_TILT_RADIANS` for a commit index.
- * Deterministic so a replayed session settles identically — see the note above.
+ * Righting torque per radian of tilt, scaled by the body's mass so heavy and
+ * light words right themselves in comparable time.
+ *
+ * It can be strong because freezing keys on *linear* stillness alone (see the
+ * freeze condition): a stronger torque rights a word faster while it settles
+ * without keeping it awake, where an earlier version that froze on angular
+ * stillness too had to keep this gentle or the pile never went quiet.
  */
-function tiltForCommitIndex(id: number): number {
-  let hash = Math.imul(id ^ 0x9e3779b9, 0x85ebca6b);
-  hash ^= hash >>> 13;
-  const unit = ((hash >>> 0) / 0xffffffff) * 2 - 1; // [-1, 1]
-  return unit * MAX_COMMIT_TILT_RADIANS;
-}
+const ORIENT_TORQUE_GAIN = 0.11;
 
-/** Restitution range. Nothing in the room is a superball. */
-const MAX_RESTITUTION = 0.55;
+/**
+ * Restitution: bounciness, and it is meant to be obvious.
+ *
+ * The property model already scores this well — `ball` +0.79, `rock` −0.25 — but
+ * two things were flattening it. The floor had no restitution and Rapier averages
+ * the two contacting surfaces, so a bouncy word hitting a dead floor lost half
+ * its bounce; the word colliders now combine restitution by *max*, so the word's
+ * own bounciness wins over the floor. And the mapping is now positives-only:
+ * anything the model scores at or below zero (clay, stone, bone) maps to a dead
+ * `0`, so `rock` truly hard-stops, while positive scores ramp up to
+ * `MAX_RESTITUTION`. That is the crisp `ball`-bounces / `rock`-thuds split.
+ *
+ * `MAX_RESTITUTION` is set so the bounciest words hop a few decreasing times and
+ * then rest — bouncy, but not a superball that never settles and never freezes.
+ */
+const MAX_RESTITUTION = 0.72;
+
+/**
+ * Wake-on-impact: a frozen word is knocked back to dynamic only when struck by
+ * another word *moving* faster than `WAKE_IMPACT_SPEED`, not merely leaned on.
+ *
+ * The gate is velocity, not contact force, and the distinction is load-bearing.
+ * A force threshold cannot tell "just landed hard" from "sitting there heavily":
+ * a heavy word's resting weight on the word beneath it exceeds any force worth
+ * waking on, so it would re-wake its neighbour every single step and the pile
+ * would never go quiet. A striker's *speed* separates them cleanly — a falling
+ * word arrives fast, a resting one is below the freeze threshold — and it also
+ * damps the cascade, since a knocked word re-settles slowly and so does not
+ * re-trigger its own neighbours.
+ *
+ * `WAKE_IMPACT_FORCE` stays as the colliders' contact-force *event* threshold:
+ * it only decides which contacts are worth examining at all (a frozen pile
+ * generates ~0 internal force, a light landing ~17, a heavy one ~640), keeping
+ * event traffic cheap. The wake decision itself is the speed test below.
+ */
+const WAKE_IMPACT_FORCE = 80;
+const WAKE_IMPACT_SPEED = 2;
+
+/**
+ * When an impact wakes a frozen word, frozen words within this radius of it wake
+ * too, so a heavy landing produces a visible local *give* — the pile settles a
+ * little where it was hit — rather than one pinned word twitching. Bounded and
+ * one-shot: the woken cluster re-settles slowly (below `WAKE_IMPACT_SPEED`) so it
+ * does not re-trigger its own neighbours, and it re-freezes within the usual
+ * delay.
+ */
+const WAKE_RADIUS = 1.3;
+
+/** Shortest signed angle from `angle` to upright (0), in (−π, π]. */
+function wrapToPi(angle: number): number {
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
 
 /** High enough that words stack and hold rather than sliding into a flat layer. */
 const FRICTION = 0.85;
@@ -156,13 +217,14 @@ const COMMIT_IMPULSE_UNITS_PER_S = -1.2;
  *
  * Freezing sidesteps islands entirely: a fixed body is not in one. It also
  * matches what the piece already claims to be — a room that accumulates
- * sediment. The tradeoff is real and deliberate: a frozen word no longer shifts
- * when something lands on it. That is why the delay is generous rather than
- * tight, so the live surface of the pile stays dynamic and only what is buried
- * turns to rock.
+ * sediment. A frozen word holds absolutely still, which made the settled pile
+ * feel dead: dropping a heavy word onto it moved nothing. Wake-on-impact
+ * restores that reaction — a hard enough contact (`WAKE_IMPACT_FORCE`) turns a
+ * struck frozen word back to dynamic so it shifts and then re-settles. The
+ * generous delay still keeps the buried mass sediment; only what is hit hard, or
+ * still on the live surface, moves.
  */
 const FREEZE_LINEAR_SPEED = 0.08;
-const FREEZE_ANGULAR_SPEED = 0.2;
 const FREEZE_AFTER_MS = 1500;
 
 // --- Density-aware rate -----------------------------------------------------
@@ -186,7 +248,8 @@ export interface WordBody {
   asleep: boolean;
   /**
    * Turned static after settling. A frozen word holds its position absolutely
-   * and no longer shifts when something lands on it — see the freeze constants.
+   * until something *hard* lands on it, at which point it wakes back to dynamic
+   * — see `WAKE_IMPACT_FORCE` and the freeze constants.
    */
   frozen: boolean;
 }
@@ -202,11 +265,15 @@ export interface PhysicsRoom {
   physicsHz(): number;
   /** Rebuild the walls for a new aspect ratio. */
   setAspect(aspect: number): void;
-  /** Drop a word into the room at the cursor. Returns null if it has no geometry. */
+  /**
+   * Drop a word into the room, centred horizontally on `spawnX` (world units,
+   * where the cursor is). Returns null if the word has no geometry.
+   */
   commit(
     word: string,
     geometry: WordGeometry,
     scores: PropertyScores,
+    spawnX: number,
   ): WordBody | null;
   /** Advance by one fixed step. */
   step(fixedDeltaMs: number): void;
@@ -255,6 +322,14 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
   const handles = new Map<number, RAPIER.RigidBody>();
   /** Milliseconds each still-dynamic body has spent below the freeze thresholds. */
   const stillForMs = new Map<number, number>();
+  /** Collider handle → the word it belongs to, for resolving impact events. */
+  const bodyByCollider = new Map<number, WordBody>();
+  /**
+   * Drained after every step to find hard contacts. Autodrain is off; contacts
+   * are read explicitly in `step`. Only colliders whose contact-force threshold
+   * is exceeded generate events, so this stays cheap in a settled room.
+   */
+  const eventQueue = new RAPIER.EventQueue(false);
 
   let roomWidth = ROOM_HEIGHT_UNITS * aspect;
   let walls: RAPIER.RigidBody | null = null;
@@ -300,6 +375,47 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
       : PHYSICS_HZ_DENSE;
   }
 
+  /** Linear speed of a word's body, or 0 if it has none. */
+  function speedOf(wordBody: WordBody): number {
+    const body = handles.get(wordBody.id);
+    if (!body) return 0;
+    const v = body.linvel();
+    return Math.hypot(v.x, v.y);
+  }
+
+  /** Turn one frozen word back to dynamic and restart its settle timer. */
+  function wakeBody(wordBody: WordBody): void {
+    const body = handles.get(wordBody.id);
+    if (!body) return;
+    body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+    wordBody.frozen = false;
+    wordBody.asleep = false;
+    stillForMs.set(wordBody.id, 0);
+  }
+
+  /**
+   * If `target` is frozen and `striker` is a word moving faster than
+   * `WAKE_IMPACT_SPEED`, wake `target` and the frozen cluster within
+   * `WAKE_RADIUS` of it so the pile visibly gives where it was hit, then let them
+   * re-settle and re-freeze. A no-op when `target` is not frozen or the striker
+   * is a wall / a slow resting neighbour — which is what keeps dead weight from
+   * perpetually re-waking the word beneath it.
+   */
+  function considerWake(
+    target: WordBody | undefined,
+    striker: WordBody | undefined,
+  ): void {
+    if (!target || !target.frozen || !striker) return;
+    if (speedOf(striker) <= WAKE_IMPACT_SPEED) return;
+    const cx = target.x;
+    const cy = target.y;
+    for (const wordBody of bodies) {
+      if (!wordBody.frozen) continue;
+      if (Math.hypot(wordBody.x - cx, wordBody.y - cy) <= WAKE_RADIUS)
+        wakeBody(wordBody);
+    }
+  }
+
   return {
     bodies,
     get roomWidth(): number {
@@ -320,6 +436,7 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
       word: string,
       geometry: WordGeometry,
       scores: PropertyScores,
+      spawnX: number,
     ): WordBody | null {
       if (geometry.hulls.length === 0) return null;
 
@@ -331,26 +448,26 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
       const damping =
         MIN_LINEAR_DAMPING +
         fallResistance(scores) * (MAX_LINEAR_DAMPING - MIN_LINEAR_DAMPING);
-      const restitution = lerp(scores.restitution, 0, MAX_RESTITUTION);
+      // Positives-only: anything the model rates clay-to-neutral (≤ 0) hard-stops
+      // at 0; only genuinely bouncy words rebound. See MAX_RESTITUTION.
+      const restitution =
+        MAX_RESTITUTION * Math.max(0, Math.min(1, scores.restitution));
 
-      // The id is claimed up front so the commit-index tilt can be baked into
-      // the body before it exists — the tilt is fixed at creation and rotation
-      // is then locked, so a word never spins.
       const id = nextId;
       nextId += 1;
 
-      // Committed at the cursor, which DESIGN.md fixes at the centre of the
-      // room, then given a nudge downward rather than released from rest.
-      // Rotation is locked at a small fixed tilt — see MAX_COMMIT_TILT_RADIANS.
+      // Released at the cursor's x (DESIGN.md: words land where the cursor is),
+      // then nudged downward rather than dropped from rest. Free to rotate under
+      // real physics; the righting torque in `step` settles it upright.
       const body = world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic()
-          .setTranslation(0, 0)
-          .setRotation(tiltForCommitIndex(id))
-          .lockRotations()
+          .setTranslation(spawnX, 0)
           .setLinearDamping(damping)
+          .setAngularDamping(ANGULAR_DAMPING)
           .setLinvel(0, COMMIT_IMPULSE_UNITS_PER_S),
       );
 
+      const colliderHandles: number[] = [];
       let attached = 0;
       let rejected = 0;
       for (const [index, hull] of geometry.hulls.entries()) {
@@ -368,9 +485,15 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
         if (!collider) continue;
         collider.setDensity(density);
         collider.setRestitution(restitution);
+        // Max, not the default average, so a bouncy word keeps its bounce
+        // against the dead floor instead of losing half of it.
+        collider.setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Max);
         collider.setFriction(FRICTION);
+        // Only hard contacts fire, so a settled pile generates no events.
+        collider.setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS);
+        collider.setContactForceEventThreshold(WAKE_IMPACT_FORCE);
         try {
-          world.createCollider(collider, body);
+          colliderHandles.push(world.createCollider(collider, body).handle);
           attached += 1;
         } catch {
           // One unusable sliver costs a sliver of silhouette. Letting it
@@ -403,6 +526,8 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
       };
 
       handles.set(wordBody.id, body);
+      for (const handle of colliderHandles)
+        bodyByCollider.set(handle, wordBody);
       bodies.push(wordBody);
       debug(
         "physics",
@@ -415,7 +540,18 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
 
     step(fixedDeltaMs: number): void {
       world.timestep = fixedDeltaMs / 1000;
-      world.step();
+      world.step(eventQueue);
+
+      // A forceful contact (above the colliders' event threshold) can wake a
+      // frozen word — but only if the word that hit it is actually moving, which
+      // considerWake checks. Either collider may be the frozen one, so both
+      // orderings are tried.
+      eventQueue.drainContactForceEvents((event) => {
+        const a = bodyByCollider.get(event.collider1());
+        const b = bodyByCollider.get(event.collider2());
+        considerWake(a, b);
+        considerWake(b, a);
+      });
 
       for (const wordBody of bodies) {
         const body = handles.get(wordBody.id);
@@ -430,9 +566,29 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
         if (wordBody.frozen) continue;
 
         const velocity = body.linvel();
-        const still =
-          Math.hypot(velocity.x, velocity.y) < FREEZE_LINEAR_SPEED &&
-          Math.abs(body.angvel()) < FREEZE_ANGULAR_SPEED;
+        const linSpeed = Math.hypot(velocity.x, velocity.y);
+
+        // Right the word once it has slowed — a word still in flight keeps
+        // tumbling. Inside the deadband the torque is zero, so a settled word
+        // can go still and freeze. wakeUp=false so righting never wakes a
+        // sleeping neighbour; a buried word's torque is cancelled by contacts.
+        if (linSpeed < ORIENT_ACTIVE_SPEED) {
+          const tilt = wrapToPi(wordBody.rotation);
+          if (Math.abs(tilt) > ORIENT_DEADBAND) {
+            body.applyTorqueImpulse(
+              -ORIENT_TORQUE_GAIN * tilt * body.mass(),
+              false,
+            );
+          }
+        }
+
+        // Linear stillness alone: a word that has stopped *moving* is settled,
+        // even if the righting torque is still easing it upright. Requiring
+        // angular stillness too would strand any word torqued toward upright
+        // from outside the deadband — it would never freeze and the room would
+        // never go quiet. Angular damping and the deadband keep the frozen angle
+        // readable; see ORIENT_DEADBAND.
+        const still = linSpeed < FREEZE_LINEAR_SPEED;
         const elapsed = still
           ? (stillForMs.get(wordBody.id) ?? 0) + fixedDeltaMs
           : 0;
@@ -441,7 +597,7 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
         if (elapsed >= FREEZE_AFTER_MS) {
           // Not `sleep()` — see the note on the freeze constants. Fixed bodies
           // are outside the island graph, so this cannot be undone by a
-          // neighbour waking up.
+          // neighbour waking up. Only a hard impact reverts it, via wakeFrozen.
           body.setBodyType(RAPIER.RigidBodyType.Fixed, false);
           wordBody.frozen = true;
           wordBody.asleep = true;
@@ -453,6 +609,7 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
     clear(): void {
       for (const body of handles.values()) world.removeRigidBody(body);
       handles.clear();
+      bodyByCollider.clear();
       stillForMs.clear();
       bodies.length = 0;
     },

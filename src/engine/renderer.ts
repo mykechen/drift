@@ -77,6 +77,7 @@ export interface RoomRenderer {
     roomHalfWidth: number,
     roomHalfHeight: number,
     wordScale: number,
+    cursorX: number,
   ) => void;
 }
 
@@ -196,6 +197,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       roomHalfWidth: number,
       roomHalfHeight: number,
       wordScale: number,
+      cursorX: number,
     ): void {
       for (const body of bodies) {
         const mesh = meshes.get(body.id);
@@ -214,11 +216,10 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       }
       if (draft) {
         const uniforms = draft.program.uniforms;
-        // The cursor is fixed at the centre of the room per DESIGN.md, and the
-        // draft is centred on it rather than growing rightward from a caret —
-        // which keeps the composition centred and matches where the committed
-        // body will spawn.
-        (uniforms["uTranslation"] as { value: number[] }).value = [0, 0];
+        // The draft is centred on the cursor — which follows the mouse in x —
+        // rather than growing rightward from a caret, so it sits exactly where
+        // the committed body will spawn (DESIGN.md: words land at the cursor).
+        (uniforms["uTranslation"] as { value: number[] }).value = [cursorX, 0];
         (uniforms["uRotation"] as { value: number }).value = 0;
         (uniforms["uScale"] as { value: number }).value = wordScale;
         (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
