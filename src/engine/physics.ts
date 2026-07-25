@@ -85,10 +85,41 @@ const MAX_LINEAR_DAMPING = 3.2;
 const DRAG_RESIDUAL_INFLUENCE = 0.45;
 
 /**
- * Angular damping, fixed and high. Per CLAUDE.md words should tumble slightly
- * and settle flat, never spin like propellers.
+ * Rotation is locked and each word is committed at a small fixed tilt instead of
+ * being left free to spin.
+ *
+ * CLAUDE.md asks for words that "tumble slightly and settle flat," and DESIGN.md
+ * feel test 4 judges the settled room as a composition. Free rotation with only
+ * angular damping failed that test badly: a settled 200-word room measured a
+ * median tilt near 69° with 80 of 200 words past 90° — sideways to upside down —
+ * and the words that still read as *language* were exactly the near-upright few.
+ * For a piece whose premise is a room that accumulates language, a jumble where
+ * half the words are unreadable is the wrong failure.
+ *
+ * Angular damping alone cannot guarantee this — where a word settles depends on
+ * how it lands and what it lands on. A restoring torque could, but it fights the
+ * freeze mechanism (see the freeze constants): any torque applied every step
+ * keeps bodies awake and a full room then never freezes and goes over budget.
+ * Locking rotation sidesteps that entirely — there is no angular degree of
+ * freedom to damp, keep awake, or pay for in the solver.
+ *
+ * The small tilt is what keeps a locked pile from reading as mechanically
+ * uniform bricks. It is *deterministic*, derived from the word's commit index,
+ * so that DESIGN.md's session-replay URL reproduces the same composition rather
+ * than re-randomising the tilt of every word on replay.
  */
-const ANGULAR_DAMPING = 4.5;
+const MAX_COMMIT_TILT_RADIANS = (7 * Math.PI) / 180;
+
+/**
+ * A stable pseudo-random tilt in ±`MAX_COMMIT_TILT_RADIANS` for a commit index.
+ * Deterministic so a replayed session settles identically — see the note above.
+ */
+function tiltForCommitIndex(id: number): number {
+  let hash = Math.imul(id ^ 0x9e3779b9, 0x85ebca6b);
+  hash ^= hash >>> 13;
+  const unit = ((hash >>> 0) / 0xffffffff) * 2 - 1; // [-1, 1]
+  return unit * MAX_COMMIT_TILT_RADIANS;
+}
 
 /** Restitution range. Nothing in the room is a superball. */
 const MAX_RESTITUTION = 0.55;
@@ -302,13 +333,21 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
         fallResistance(scores) * (MAX_LINEAR_DAMPING - MIN_LINEAR_DAMPING);
       const restitution = lerp(scores.restitution, 0, MAX_RESTITUTION);
 
+      // The id is claimed up front so the commit-index tilt can be baked into
+      // the body before it exists — the tilt is fixed at creation and rotation
+      // is then locked, so a word never spins.
+      const id = nextId;
+      nextId += 1;
+
       // Committed at the cursor, which DESIGN.md fixes at the centre of the
       // room, then given a nudge downward rather than released from rest.
+      // Rotation is locked at a small fixed tilt — see MAX_COMMIT_TILT_RADIANS.
       const body = world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic()
           .setTranslation(0, 0)
+          .setRotation(tiltForCommitIndex(id))
+          .lockRotations()
           .setLinearDamping(damping)
-          .setAngularDamping(ANGULAR_DAMPING)
           .setLinvel(0, COMMIT_IMPULSE_UNITS_PER_S),
       );
 
@@ -352,7 +391,7 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
       }
 
       const wordBody: WordBody = {
-        id: nextId,
+        id,
         word,
         geometry,
         scores,
@@ -362,7 +401,6 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
         asleep: false,
         frozen: false,
       };
-      nextId += 1;
 
       handles.set(wordBody.id, body);
       bodies.push(wordBody);

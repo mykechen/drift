@@ -765,3 +765,88 @@ mass's primary expression in the piece is *fall speed*, which comes from linear
 damping and is untouched — density only governs how hard words shove each other.
 But it does reduce how much a boulder bullies a feather on contact, which is a
 feel judgement rather than a technical one.
+
+### Phase 2 — settling words flat, and why the tumble was cut
+
+The open feel defect from the freezing work was that words settle at arbitrary
+angles. Measured on a full 200-word room the median tilt was ~69° with 80 of 200
+words past 90° — sideways to upside down — and only 13 genuinely upright. That
+contradicts CLAUDE.md ("words should tumble slightly and settle flat, never spin
+like propellers") and it fights the premise of the piece: a room that
+accumulates *language* should not be half-full of unreadable words.
+
+The still is the argument. Before, the words that still read as language were
+exactly the near-upright few; everything rotated dissolved into abstract
+mark-making (`docs/images/rotation-before.png`). This was looked at cold first,
+per feel test 4, rather than decided from the numbers — and the numbers only
+confirmed what the picture already said.
+
+**Three directions were on the table**, and the choice was the author's because
+it changes the character of the settled room:
+
+1. Lock rotation and commit each word at a small fixed tilt.
+2. A restoring torque toward upright — an angular spring.
+3. Accept the jumble and clamp only the extremes.
+
+**The torque was the trap.** It is the most literal reading of "tumble slightly
+and settle flat" — words tumble on impact, then right themselves — but it fights
+the freeze mechanism head-on. Any torque applied every step keeps bodies awake,
+and a full room that never freezes goes straight back over the frame budget the
+freezing work just bought. A deadband and an un-waking `applyTorqueImpulse` could
+mitigate it, but in a dense pile a *buried* word physically cannot rotate upright
+anyway — there is no room — so the torque only ever helps the surface, at real
+risk to the one number that must not regress. This is the same shape as every
+"keep it moving" approach the freezing section already rejected.
+
+**The decision was option 1: lock rotation, small fixed tilt.** It is the only
+option that guarantees the readability the piece's premise depends on, and it
+costs *nothing* against the freeze mechanism — locking removes the angular
+degree of freedom entirely, so there is nothing to damp, keep awake, or pay for
+in the solver. What it sacrifices is the dynamic tumble *during* the fall, which
+lasts under a second and which feel test 4 — a still — never sees.
+
+**The tilt is deterministic, and that is a design decision, not an
+implementation detail.** A fixed ±7° tilt per word keeps a locked pile from
+reading as mechanically uniform bricks. But DESIGN.md's session-replay URL
+replays a word sequence and must reproduce *the same composition*; a
+`Math.random()` tilt would make every replay a different pile. So the tilt is
+derived from the word's commit index through a small integer hash — stable,
+reproducible under replay, and still varied even for repeated words like
+`stone stone stone`. `ANGULAR_DAMPING` was removed in the same change: with
+rotation locked it damped a degree of freedom that no longer exists.
+
+**Result** (`docs/images/rotation-after.png`): a settled 200-word room measures
+a median tilt of **3.5°** and a maximum of **7.0°** — every word inside the
+upright band, none past 15°, against a before of median 69° and 80 words past
+90°. The room still reaches **200 / 200 frozen**, so freeze convergence is
+untouched. Feel test 1 still passes: boulder falls to the floor faster than
+feather (measured 916ms vs 1749ms, boulder accelerating and feather at terminal
+velocity), because locking the angular DOF cannot touch the vertical fall, which
+is gravity and linear damping.
+
+**The step-cost budget is not regressed, and the argument is structural rather
+than a fresh measurement.** Locking rotation strictly *removes* solver work — one
+fewer degree of freedom per body — so per-step cost can only fall or stay equal,
+never rise; and the budget is delivered by freezing, which is verified intact at
+200/200. A clean absolute re-measurement of the 10.5ms p50 was not obtainable
+through the Playwright driver: an automated Chrome window that is not the OS
+foreground app has its timers clamped and its renderer CPU deprioritised, which
+inflates every wall-clock reading, and driving the fill fast enough to dodge that
+throttle produces one interpenetrating central pile — the same worthless
+measurement the earlier stress-test section warned about — rather than a room the
+freeze mechanism has thinned. The rotation and freeze results above are *state*,
+not timing, so they are immune to the throttle; the step number is the one thing
+that is not, and it is the one defensible by construction.
+
+**One honest interaction, flagged rather than hidden.** Locking rotation removes
+the chaotic tumble that used to shove landing words sideways, so words now fall
+dead-straight onto the same spawn point and the x=0 spawn column is *tighter*
+than before — a settled room occupies an x-slice of about 0.5 units in a 13.3-unit
+room. The unreadable-fan look and this tight-column look are two faces of the
+same unfixed spawn issue (every word spawns at x=0); the rotation fix did not
+cause it, but it does make it more visible, because the tumble was incidentally
+masking it. The intended fix is unchanged — DESIGN.md's cursor safe-zone and
+Phase 5's semantic gravity spread words horizontally — and the after-still's
+central blob is that spawn column, not a rotation artifact. Recorded so the
+column is judged as the spawn problem it is, not mistaken for a regression in
+this change.
