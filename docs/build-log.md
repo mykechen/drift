@@ -683,3 +683,85 @@ sleeping works.
 **Still open for Phase 2:** island sleeping, the SDF atlas and shader, and
 re-testing the flattening tolerance now that there is behaviour to judge it
 against.
+
+### Phase 2 — making a full room cheap, and four measurements that said no
+
+The open defect was that a room at its 200-word soft cap never stopped
+simulating. Four candidate fixes were measured. Three failed, and the failures
+are more instructive than the fix.
+
+**The hand-rolled settling was causing the problem, not working around it.** The
+first implementation tracked each body's speed and called `sleep()` after half a
+second of stillness, on the assumption that Rapier's own thresholds were
+unreachable from JavaScript. Removing it entirely made small rooms sleep
+correctly — twelve words, all asleep. Rapier sleeps by **island**: every body in
+a connected set of contacts sleeps together or not at all, and forcing one body
+in a live island to sleep resets the activation timer its island logic depends
+on. The workaround was the bug.
+
+**Locking rotation did nothing for sleeping.** Worth trying because the settled
+pile had a median rotation of 98.6° and a maximum of 179.4° — half the words
+lying sideways or upside down, which contradicts CLAUDE.md's "tumble slightly and
+settle flat" — and a heap of randomly angled sticks plausibly creeps longer than
+a stack of level slabs. With rotations locked (verified: max rotation 0°) the
+pile still slept nothing. Reverted, because it cost the tumble and bought
+nothing. *The rotation problem itself is still open and is a feel question, not
+a performance one.*
+
+**Doubling solver iterations made it worse.** Tried first among the remaining
+options precisely because it costs no feel at all, only CPU — the theory being
+that contact error in a fifteen-deep pile needs more iterations to propagate to
+the bottom. At 8 iterations instead of 4: still nothing asleep, and the step cost
+went from 23ms to 41.6ms.
+
+**Halving the collider count changed nothing.** Coarsening the flattening
+tolerance from 1/32 to 1/16 em took a full room from 7,993 colliders to 5,253 —
+47 per word down to 26 — and moved the step cost from 23ms to 22.2ms, which is
+noise. This is the measurement that reframed the problem: **the cost of a
+crowded room is the constraint solver working over a large island of awake
+bodies, not the number of colliders in it.** The tolerance was reverted to the
+value that looks right, since it turns out not to be a performance lever at all.
+The deferred question from earlier in the phase is now answered, in the negative.
+
+#### What worked: freezing settled words into static bodies
+
+Sleeping was only ever a means. The end is a full room at 60fps, and there is a
+way to get it that sidesteps islands entirely — a *fixed* body is not in one.
+
+A word that has stayed below a small speed threshold for 1.5 seconds is
+converted to a static body. Measured on a full 200-word room:
+
+| | before | after |
+|---|---|---|
+| step p50 | 22–23ms | **10.5ms** |
+| step p95 | 25–26ms | **12.2ms** |
+| step max | 27ms | **12.8ms** |
+| budget at 60Hz | 16.7ms | 16.7ms |
+
+Left alone for ten seconds, the room reaches 200 of 200 frozen and stops
+simulating altogether. Feel test 1 is unaffected — boulder still falls in 1133ms
+and feather in 1863ms.
+
+**The tradeoff is real and was verified rather than assumed.** A frozen word
+holds its position absolutely: committing a new word onto a frozen pile moves it
+by exactly 0.0000 units. The pile becomes sediment. That is why the delay is
+1.5 seconds rather than tight — the live surface of the pile stays dynamic and
+only what is buried turns to rock — but it *is* a change to what the room is,
+and it deserves the author's eye rather than a silent commit.
+
+**It also collides with Phase 5.** Semantic gravity's whole premise is feel test
+2: type `stone`, wait, type `rock`, and watch `rock` drift toward `stone`. A
+frozen word cannot drift. Whatever form the force field takes, it will need
+either to unfreeze bodies it wants to move or to leave the top of the pile
+permanently live. Recorded now so it is a design decision then, rather than a
+surprise.
+
+#### One more change worth flagging
+
+The density range narrowed from 0.15–6 to 0.6–3, a 40:1 mass ratio down to 5:1.
+Large mass ratios are a classic cause of solver jitter, and this measurably
+improved both settling and step cost. It is defensible on its own terms because
+mass's primary expression in the piece is *fall speed*, which comes from linear
+damping and is untouched — density only governs how hard words shove each other.
+But it does reduce how much a boulder bullies a feather on contact, which is a
+feel judgement rather than a technical one.

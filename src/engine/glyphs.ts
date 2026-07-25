@@ -35,6 +35,14 @@ import type { FontAxes } from "../design/typography";
  * tolerance is a little over two pixels of deviation on the inside of an `o` —
  * far below what a collision could express, and invisible against an SDF that
  * draws from the true curve regardless. Verified by eye at /debug/glyphs.
+ *
+ * Coarsening it was tried as a performance lever and does not work. Going to
+ * 1/16 em halves the colliders in a full room — 47 per word down to 26, 7,993
+ * down to 5,253 — and leaves the physics step within noise of where it was
+ * (22.2ms against 23ms). The cost of a crowded room is the constraint solver
+ * working over a large island of awake bodies, not the number of colliders in
+ * it. So this stays at the value that looks right rather than the value that
+ * was supposed to be faster.
  */
 export const FLATTEN_TOLERANCE_EM = 1 / 32;
 

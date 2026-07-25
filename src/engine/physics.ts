@@ -64,8 +64,8 @@ export const WORD_EM_UNITS = 0.4;
  * same score — `boulder` outweighs `rock` partly because there is more of it,
  * which is both physically honest and reads correctly.
  */
-const DENSITY_AT_LIGHTEST = 0.15;
-const DENSITY_AT_HEAVIEST = 6;
+const DENSITY_AT_LIGHTEST = 0.6;
+const DENSITY_AT_HEAVIEST = 3;
 
 /**
  * Linear damping range. This is what actually makes a feather fall differently
@@ -105,14 +105,34 @@ const COMMIT_IMPULSE_UNITS_PER_S = -1.2;
 // --- Settling ---------------------------------------------------------------
 
 /**
- * Rapier's JavaScript bindings do not expose its sleep thresholds, so settling
- * is implemented here instead: a body slower than these limits for
- * `SETTLE_AFTER_MS` is put to sleep by hand. CLAUDE.md asks for a settled word
- * to stop simulating within about half a second of coming to rest.
+ * A word slower than these limits for `FREEZE_AFTER_MS` becomes a *static* body.
+ *
+ * Sleeping alone cannot carry a full room, and the reason is structural. Rapier
+ * sleeps by **island**: every body in a connected set of contacts sleeps
+ * together or not at all, so in a two-hundred-word pile — which is one island —
+ * a single jittering body resets the timer for all of it. Measured, a settled
+ * pile has 194 of 200 bodies below the sleep threshold and sleeps none of them;
+ * the count flickers to 1 or 2 and falls back to 0 as micro-collapses ripple
+ * through. That is combinatorial, not a threshold that can be tuned.
+ *
+ * Three other levers were measured and rejected first. Forcing individual
+ * bodies to `sleep()` made it *worse*, because it resets the activation timer
+ * Rapier's own island logic depends on. Doubling solver iterations to 8 slept
+ * nothing and cost 41.6ms a step against 23ms. Halving the collider count via a
+ * coarser flattening tolerance changed the step cost by nothing at all, which is
+ * what established that the cost is solver work over awake bodies rather than
+ * collider count.
+ *
+ * Freezing sidesteps islands entirely: a fixed body is not in one. It also
+ * matches what the piece already claims to be — a room that accumulates
+ * sediment. The tradeoff is real and deliberate: a frozen word no longer shifts
+ * when something lands on it. That is why the delay is generous rather than
+ * tight, so the live surface of the pile stays dynamic and only what is buried
+ * turns to rock.
  */
-const SETTLE_LINEAR_SPEED = 0.06;
-const SETTLE_ANGULAR_SPEED = 0.15;
-const SETTLE_AFTER_MS = 500;
+const FREEZE_LINEAR_SPEED = 0.08;
+const FREEZE_ANGULAR_SPEED = 0.2;
+const FREEZE_AFTER_MS = 1500;
 
 // --- Density-aware rate -----------------------------------------------------
 
@@ -131,7 +151,13 @@ export interface WordBody {
   y: number;
   /** Radians. */
   rotation: number;
+  /** Not simulating: either Rapier put it to sleep or it has been frozen. */
   asleep: boolean;
+  /**
+   * Turned static after settling. A frozen word holds its position absolutely
+   * and no longer shifts when something lands on it — see the freeze constants.
+   */
+  frozen: boolean;
 }
 
 export interface PhysicsRoom {
@@ -196,6 +222,7 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
   const world = new RAPIER.World({ x: 0, y: GRAVITY_UNITS_PER_S2 });
   const bodies: WordBody[] = [];
   const handles = new Map<number, RAPIER.RigidBody>();
+  /** Milliseconds each still-dynamic body has spent below the freeze thresholds. */
   const stillForMs = new Map<number, number>();
 
   let roomWidth = ROOM_HEIGHT_UNITS * aspect;
@@ -333,6 +360,7 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
         y: 0,
         rotation: 0,
         asleep: false,
+        frozen: false,
       };
       nextId += 1;
 
@@ -359,21 +387,28 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
         wordBody.x = translation.x;
         wordBody.y = translation.y;
         wordBody.rotation = body.rotation();
-        wordBody.asleep = body.isSleeping();
+        wordBody.asleep = body.isSleeping() || wordBody.frozen;
 
-        if (wordBody.asleep) continue;
+        if (wordBody.frozen) continue;
 
-        // Hand-rolled settling, since the bindings do not expose Rapier's own
-        // thresholds. A body slow enough for long enough is put to sleep.
         const velocity = body.linvel();
         const still =
-          Math.hypot(velocity.x, velocity.y) < SETTLE_LINEAR_SPEED &&
-          Math.abs(body.angvel()) < SETTLE_ANGULAR_SPEED;
+          Math.hypot(velocity.x, velocity.y) < FREEZE_LINEAR_SPEED &&
+          Math.abs(body.angvel()) < FREEZE_ANGULAR_SPEED;
         const elapsed = still
           ? (stillForMs.get(wordBody.id) ?? 0) + fixedDeltaMs
           : 0;
         stillForMs.set(wordBody.id, elapsed);
-        if (elapsed >= SETTLE_AFTER_MS) body.sleep();
+
+        if (elapsed >= FREEZE_AFTER_MS) {
+          // Not `sleep()` — see the note on the freeze constants. Fixed bodies
+          // are outside the island graph, so this cannot be undone by a
+          // neighbour waking up.
+          body.setBodyType(RAPIER.RigidBodyType.Fixed, false);
+          wordBody.frozen = true;
+          wordBody.asleep = true;
+          stillForMs.delete(wordBody.id);
+        }
       }
     },
 
