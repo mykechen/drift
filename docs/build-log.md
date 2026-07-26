@@ -1371,3 +1371,85 @@ inside budget even with freezing contributing nothing at all.
 > 200, which would make that mechanism dead on arrival. Either the crush is too
 > aggressive or the cap is the wrong instrument. Recorded for Phase 3, where the
 > aging work lives; it is a feel judgement and belongs to the author.
+
+---
+
+## Phase 2 (completed) — the SDF
+
+The last two open items in Phase 2. Words were drawn as flat fills of the same
+triangulation their colliders were cut from, which was the right call at the
+time — the picture could not disagree with the simulation — and the wrong one to
+ship, because the facets are visible (`docs/images/sdf-before-after.png`, old on
+top, new below).
+
+### One field per word, not an atlas
+
+The usual approach is an MSDF atlas of glyphs, and it does not survive this
+piece's premise. `wght` and `wdth` move *per word*, so an atlas would have to
+cover the axis grid — 100 glyphs × 18 samples — which puts back a large share of
+the payload Phase 2.5 just removed. Worse, blending two rasterised fields only
+approximates the shape between them; it is not the same operation as
+interpolating outlines, which is what the font actually does.
+
+So: **a field per word, generated on commit, cached exactly as its hulls
+already are.** A word is small, it is generated once, and axis values can be
+anything.
+
+**The browser rasterises the curves.** `Path2D` takes the baked quadratics
+directly and fills them with the nonzero winding rule — which is what makes a
+counter a hole — in native code. A hand-written scanline rasteriser would be
+longer, slower, and worse at the one thing that has to be exactly right. The
+mask then goes through an 8-point signed sequential Euclidean distance
+transform, which keeps distances Euclidean rather than the chessboard
+approximation a naive two-pass transform produces.
+
+**This is what baking control points in Phase 2.5 was for.** Had the bake stored
+flattened polygons, the SDF would be drawing the same faceted silhouette as the
+colliders and the whole exercise would be pointless. `glyphs.ts` now returns the
+raw curves alongside the flattened contours, built in the same pass off the same
+pen position and shifted by the same centre — because a picture and a body that
+disagree by a rounding error are very hard to see and very easy to misdiagnose.
+Note the bounding box comes from the *flattened* contours deliberately: a
+quadratic's control point can sit outside the curve it describes, so a box
+fitted to the raw path would be slightly larger and would offset the word from
+its body.
+
+### Two performance findings, both measured
+
+The first version took **97ms a word**, which is six dropped frames on a commit.
+Two causes, and neither was the distance transform's algorithm:
+
+- **Supersampling at 4× costs four times what 2× does**, because the transform
+  scales with mask *area*. What it buys is 0.002 em of precision against 0.004 —
+  on a field whose texels are 0.016 em apart, under a shader that softens the
+  edge over a whole screen pixel. Invisible; dropped to 2×.
+- **Assigning `canvas.width` reallocates the bitmap and resets 2D state**, and
+  it was happening on every bake. The canvas now grows and is never shrunk, and
+  the word is rasterised into its top-left corner. This was most of the cost of
+  a long word: `extraordinary` went from 26ms to 7.6ms.
+
+| | first version | shipped |
+|---|---|---|
+| p50 | ~97ms | **4.1ms** |
+| p95 | — | **8.4ms** |
+| worst (16-char word) | 26ms+ | **8.4ms** |
+
+Comfortably inside a 16.7ms frame, and commits are user-paced anyway.
+
+### Antialiasing without derivatives
+
+The conventional SDF shader softens its edge with `fwidth`. This one is handed
+the width as a uniform instead, because **the room already knows the answer
+exactly** — it knows how many pixels an em covers, having chosen the projection
+itself. That is both more portable (derivatives are an extension under GLSL ES
+1.00) and more correct than asking the hardware to estimate a quantity we
+computed.
+
+### What this gives up, on purpose
+
+The colliders and the drawing are now different shapes. A counter is round on
+screen and faceted in the solver. That is the intended end state — it is why the
+two pipelines were separated in the first place, and why the flattening
+tolerance can stay coarse enough for 200 bodies — but it does mean
+`/debug/glyphs` is now the *only* view of what the physics actually sees, which
+raises its value rather than lowering it.

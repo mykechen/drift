@@ -1,7 +1,16 @@
-import { Color, Geometry, Mesh, Program, Renderer, Transform } from "ogl";
+import {
+  Color,
+  Geometry,
+  Mesh,
+  Program,
+  Renderer,
+  Texture,
+  Transform,
+} from "ogl";
 import { BACKGROUND, INK } from "../design/palette";
-import type { WordOutline } from "./glyphs";
+import type { WordOutline, WordPath } from "./glyphs";
 import type { WordBody } from "./physics";
+import { createSdfBaker, SPREAD_EM, type SdfField } from "./sdf";
 import { debug } from "../util/debug";
 
 /** Retina is worth paying for; 3× displays are not. */
@@ -11,15 +20,20 @@ const MAX_DEVICE_PIXEL_RATIO = 2;
 const CRUSH_FADE_MS = 320;
 
 /**
- * Flat fill of the word's own triangulation.
+ * A word is one quad carrying its own distance field.
  *
- * Deliberately not the final rendering — Phase 3 replaces this with an SDF that
- * draws the true curves. Until then the word is drawn from exactly the
- * tessellation its colliders were cut from, which means the picture cannot
- * disagree with the simulation. A counter that looks filled *is* filled.
+ * This replaces Phase 2's flat fill of the word's triangulation. That fill had
+ * a real virtue worth naming as it goes: the picture could not disagree with
+ * the simulation, because both came from the same tessellation. The SDF gives
+ * that up deliberately. Colliders stay coarse — a collision only needs a
+ * silhouette that feels right — while the drawing gets the true quadratics, so
+ * a counter is now round on screen and faceted in the solver. That divergence
+ * is invisible at a 1/32 em flattening tolerance and it is the whole reason the
+ * two pipelines were separated.
  */
 const VERTEX_SHADER = /* glsl */ `
   attribute vec2 position;
+  attribute vec2 uv;
 
   uniform vec2 uTranslation;
   uniform float uRotation;
@@ -27,7 +41,10 @@ const VERTEX_SHADER = /* glsl */ `
   uniform vec2 uSquash;
   uniform vec2 uRoomHalfExtent;
 
+  varying vec2 vUv;
+
   void main() {
+    vUv = uv;
     float s = sin(uRotation);
     float c = cos(uRotation);
     // uSquash flattens the glyph in its own frame — used by the crush animation
@@ -39,13 +56,30 @@ const VERTEX_SHADER = /* glsl */ `
   }
 `;
 
+/**
+ * Threshold the field at its midpoint, softened by exactly one screen pixel.
+ *
+ * The softening width is handed in rather than taken from `fwidth`, which is
+ * the usual way to do this. Derivatives are an extension under GLSL ES 1.00 and
+ * the room already knows the answer exactly — it knows how many pixels an em
+ * covers, because it chose the projection — so the uniform is both more
+ * portable and more correct than asking the hardware to estimate it.
+ */
 const FRAGMENT_SHADER = /* glsl */ `
   precision mediump float;
+
+  uniform sampler2D uField;
   uniform vec3 uInk;
   uniform float uAlpha;
+  uniform float uEdgeSoftness;
+
+  varying vec2 vUv;
 
   void main() {
-    gl_FragColor = vec4(uInk, uAlpha);
+    float distance = texture2D(uField, vUv).r;
+    float coverage = smoothstep(0.5 - uEdgeSoftness, 0.5 + uEdgeSoftness, distance);
+    if (coverage <= 0.0) discard;
+    gl_FragColor = vec4(uInk, uAlpha * coverage);
   }
 `;
 
@@ -143,10 +177,96 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     debug("render", "resize", width, height, `dpr=${renderer.dpr}`);
   }
 
-  function buildMesh(positions: Float32Array): Mesh {
+  /**
+   * Fields are cached against the `WordPath` object rather than a string key.
+   *
+   * `geometryFor` and `outlineFor` already cache by word, axes and tolerance and
+   * hand back the same object every time, so object identity *is* the cache key
+   * — the same path can only ever mean the same field. It also means the key can
+   * never drift out of step with what it names, which a hand-built
+   * `word|wght|wdth` string eventually would.
+   */
+  const fields = new Map<WordPath, { texture: Texture; field: SdfField }>();
+  const baker = createSdfBaker();
+
+  // Field rows are one byte per texel and a word's width is rarely a multiple
+  // of four, so the default four-byte row alignment would shear every texture.
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+
+  function fieldFor(
+    path: WordPath,
+    emWidth: number,
+    emHeight: number,
+  ): { texture: Texture; field: SdfField } | null {
+    const cached = fields.get(path);
+    if (cached) return cached;
+
+    const field = baker.bake(path, emWidth, emHeight);
+    if (!field) return null;
+
+    const texture = new Texture(gl, {
+      image: field.data,
+      width: field.width,
+      height: field.height,
+      format: gl.LUMINANCE,
+      internalFormat: gl.LUMINANCE,
+      type: gl.UNSIGNED_BYTE,
+      // Linear filtering is the point: sampling between texels is what lets the
+      // field describe an edge finer than its own grid.
+      minFilter: gl.LINEAR,
+      magFilter: gl.LINEAR,
+      // The field carries its own spread margin, so it never samples past its
+      // edge — but clamping means a sample that does lands on paper, not on the
+      // opposite side of the word.
+      wrapS: gl.CLAMP_TO_EDGE,
+      wrapT: gl.CLAMP_TO_EDGE,
+      generateMipmaps: false,
+      flipY: false,
+    });
+
+    const entry = { texture, field };
+    fields.set(path, entry);
+    return entry;
+  }
+
+  function buildMesh(
+    path: WordPath,
+    emWidth: number,
+    emHeight: number,
+  ): Mesh | null {
+    const entry = fieldFor(path, emWidth, emHeight);
+    if (!entry) return null;
+
+    // The quad is the field's extent, not the word's: the field is wider by its
+    // spread margin on every side, and the two must line up texel for texel.
+    const halfWidth = entry.field.emWidth / 2;
+    const halfHeight = entry.field.emHeight / 2;
+
     return new Mesh(gl, {
       geometry: new Geometry(gl, {
-        position: { size: 2, data: positions },
+        position: {
+          size: 2,
+          data: new Float32Array([
+            -halfWidth,
+            halfHeight,
+            halfWidth,
+            halfHeight,
+            halfWidth,
+            -halfHeight,
+            -halfWidth,
+            halfHeight,
+            halfWidth,
+            -halfHeight,
+            -halfWidth,
+            -halfHeight,
+          ]),
+        },
+        // v grows downward to match the field's row order, which is top row
+        // first because that is how a canvas rasterises.
+        uv: {
+          size: 2,
+          data: new Float32Array([0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1]),
+        },
       }),
       program: new Program(gl, {
         vertex: VERTEX_SHADER,
@@ -154,6 +274,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
         transparent: true,
         cullFace: false,
         uniforms: {
+          uField: { value: entry.texture },
           uTranslation: { value: [0, 0] },
           uRotation: { value: 0 },
           // Set per frame from the room's own scale, so a mesh's em units land
@@ -164,15 +285,16 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           uRoomHalfExtent: { value: [1, 1] },
           uInk: { value: [ink.r, ink.g, ink.b] },
           uAlpha: { value: 1 },
+          uEdgeSoftness: { value: 0.1 },
         },
       }),
     });
   }
 
   function attach(body: WordBody): void {
-    const positions = body.geometry.triangles;
-    if (positions.length === 0) return;
-    const mesh = buildMesh(positions);
+    const { path, width, height } = body.geometry;
+    const mesh = buildMesh(path, width, height);
+    if (!mesh) return;
     mesh.setParent(scene);
     meshes.set(body.id, mesh);
   }
@@ -182,9 +304,9 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       draft.setParent(null);
       draft = null;
     }
-    if (!outline || outline.triangles.length === 0) return;
-    draft = buildMesh(outline.triangles);
-    draft.setParent(scene);
+    if (!outline) return;
+    draft = buildMesh(outline.path, outline.width, outline.height);
+    if (draft) draft.setParent(scene);
   }
 
   function crush(id: number): void {
@@ -228,6 +350,16 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       wordScale: number,
       cursorX: number,
     ): void {
+      // How soft the ink edge should be, in field units, so that it covers
+      // exactly one device pixel. The room half-height in world units maps to
+      // half the drawing buffer, an em is `wordScale` world units, and the field
+      // spans 2×SPREAD_EM across its full 0–1 range — so this is a pure unit
+      // conversion the renderer can do exactly, no derivatives required.
+      const pixelsPerWorldUnit = gl.drawingBufferHeight / (roomHalfHeight * 2);
+      const pixelsPerEm = pixelsPerWorldUnit * wordScale;
+      const edgeSoftness =
+        pixelsPerEm > 0 ? 1 / pixelsPerEm / (2 * SPREAD_EM) : 0.1;
+
       for (const body of bodies) {
         const mesh = meshes.get(body.id);
         if (!mesh) continue;
@@ -238,6 +370,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
         ];
         (uniforms["uRotation"] as { value: number }).value = body.rotation;
         (uniforms["uScale"] as { value: number }).value = wordScale;
+        (uniforms["uEdgeSoftness"] as { value: number }).value = edgeSoftness;
         (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
           roomHalfWidth,
           roomHalfHeight,
@@ -261,6 +394,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           ];
           (uniforms["uAlpha"] as { value: number }).value = 1 - t;
           (uniforms["uScale"] as { value: number }).value = wordScale;
+          (uniforms["uEdgeSoftness"] as { value: number }).value = edgeSoftness;
           (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
             roomHalfWidth,
             roomHalfHeight,
@@ -276,6 +410,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
         (uniforms["uTranslation"] as { value: number[] }).value = [cursorX, 0];
         (uniforms["uRotation"] as { value: number }).value = 0;
         (uniforms["uScale"] as { value: number }).value = wordScale;
+        (uniforms["uEdgeSoftness"] as { value: number }).value = edgeSoftness;
         (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
           roomHalfWidth,
           roomHalfHeight,

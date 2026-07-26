@@ -86,14 +86,15 @@ export interface WordGeometry {
   /**
    * The triangulation, as flat `[x, y]` pairs, three vertices per triangle.
    *
-   * This is what draws the word until the SDF lands. Drawing the same
-   * tessellation the colliders came from means the picture cannot disagree
-   * with the physics — if a counter is filled on screen it is filled in the
-   * simulation too, which is worth more during Phase 2 than smooth curves.
+   * No longer what draws the word — the SDF does, from `path`. Kept because
+   * /debug/glyphs draws it to show what the colliders were actually cut from,
+   * which is the one view where the coarse version is the interesting one.
    */
   readonly triangles: Float32Array;
   /** Triangles earcut produced before convex merging. Diagnostic only. */
   readonly triangleCount: number;
+  /** The true curves, for drawing. See `WordPath`. */
+  readonly path: WordPath;
   /** Bounding box of the whole word, em units. */
   readonly width: number;
   readonly height: number;
@@ -110,8 +111,29 @@ export interface WordGeometry {
 export interface WordOutline {
   /** Flat `[x, y]` pairs, three vertices per triangle, em units, centred. */
   readonly triangles: Float32Array;
+  /** The true curves, for drawing. See `WordPath`. */
+  readonly path: WordPath;
   readonly width: number;
   readonly height: number;
+}
+
+/**
+ * A word's outline as curves rather than polygons — what the SDF is drawn from.
+ *
+ * This is the payoff of baking control points instead of flattened rings. The
+ * colliders are deliberately coarse, because a collision only needs a
+ * silhouette that feels right; the *picture* is held to a different standard,
+ * and here it gets the true quadratics at whatever precision the rasteriser can
+ * manage. Command ids and arity match the baked format: moveTo and lineTo take
+ * two coordinates, a quadratic four, closePath none.
+ *
+ * Coordinates are em units, centred on exactly the same origin the flattened
+ * contours were centred on — so the drawn word and the simulated body share a
+ * frame, even though they no longer share a tessellation.
+ */
+export interface WordPath {
+  readonly commands: Uint8Array;
+  readonly coordinates: Float32Array;
 }
 
 export interface GlyphSource {
@@ -126,6 +148,12 @@ export interface GlyphSource {
   /** Advance width of a word in em units, without building geometry. */
   advanceFor(word: string, axes: FontAxes): number;
 }
+
+/** Command ids in a `WordPath`, mirrored from the baked format. */
+export const PATH_MOVE_TO = 0;
+export const PATH_LINE_TO = 1;
+export const PATH_QUADRATIC_TO = 2;
+export const PATH_CLOSE = 3;
 
 // --- Curve flattening -------------------------------------------------------
 
@@ -796,27 +824,66 @@ export async function loadGlyphSource(
     word: string,
     axes: FontAxes,
     tolerance: number,
-  ): { contours: Contour[]; width: number; height: number } {
+  ): {
+    contours: Contour[];
+    path: WordPath;
+    width: number;
+    height: number;
+  } {
     const scale = 1 / baked.unitsPerEm;
     const snapped = quantizeAxes(axes);
 
     const contours: Contour[] = [];
+    // The same outline a second time, unflattened. Built alongside rather than
+    // in a separate pass so both share one pen position and one centring —
+    // recomputing the layout for the drawn copy would risk the picture and the
+    // body disagreeing by a rounding error nobody could see but everyone would
+    // feel on contact.
+    const pathCommands: number[] = [];
+    const pathCoordinates: number[] = [];
+
     let penX = 0;
     for (const entry of entriesForWord(word)) {
       const row = coordinatesAt(entry, snapped);
       const coordinates = row.subarray(1);
+      const offsetX = penX * scale;
       contours.push(
         ...contoursForEntry(
           entry.commands,
           coordinates,
-          penX * scale,
+          offsetX,
           scale,
           tolerance,
         ),
       );
+
+      let read = 0;
+      for (const command of entry.commands) {
+        pathCommands.push(command);
+        const pairs =
+          command === COMMAND_QUADRATIC_TO
+            ? 2
+            : command === COMMAND_CLOSE_PATH
+              ? 0
+              : 1;
+        for (let pair = 0; pair < pairs; pair += 1) {
+          pathCoordinates.push(
+            coordinates[read]! * scale + offsetX,
+            coordinates[read + 1]! * scale,
+          );
+          read += 2;
+        }
+      }
       penX += row[0]!;
     }
-    if (contours.length === 0) return { contours, width: 0, height: 0 };
+
+    const emptyPath: WordPath = {
+      commands: new Uint8Array(0),
+      coordinates: new Float32Array(0),
+    };
+    if (contours.length === 0) {
+      return { contours, path: emptyPath, width: 0, height: 0 };
+    }
 
     let minX = Infinity;
     let minY = Infinity;
@@ -831,6 +898,11 @@ export async function loadGlyphSource(
       }
     }
 
+    // The bounding box comes from the *flattened* contours, and the curves are
+    // shifted by that same centre rather than by one of their own. A quadratic's
+    // control point can sit outside the curve it describes, so a box fitted to
+    // the raw path would be slightly larger and would put the drawn word a
+    // fraction off the body it belongs to.
     const centreX = (minX + maxX) / 2;
     const centreY = (minY + maxY) / 2;
     for (const contour of contours) {
@@ -839,8 +911,20 @@ export async function loadGlyphSource(
         contour.points[i + 1] = contour.points[i + 1]! - centreY;
       }
     }
+    for (let i = 0; i < pathCoordinates.length; i += 2) {
+      pathCoordinates[i] = pathCoordinates[i]! - centreX;
+      pathCoordinates[i + 1] = pathCoordinates[i + 1]! - centreY;
+    }
 
-    return { contours, width: maxX - minX, height: maxY - minY };
+    return {
+      contours,
+      path: {
+        commands: Uint8Array.from(pathCommands),
+        coordinates: Float32Array.from(pathCoordinates),
+      },
+      width: maxX - minX,
+      height: maxY - minY,
+    };
   }
 
   const geometries = new Map<string, WordGeometry>();
@@ -868,7 +952,7 @@ export async function loadGlyphSource(
       const cached = outlines.get(key);
       if (cached) return cached;
 
-      const { contours, width, height } = contoursForWord(
+      const { contours, path, width, height } = contoursForWord(
         word,
         axes,
         tolerance,
@@ -880,6 +964,7 @@ export async function loadGlyphSource(
 
       const outline: WordOutline = {
         triangles: Float32Array.from(mesh),
+        path,
         width,
         height,
       };
@@ -896,7 +981,7 @@ export async function loadGlyphSource(
       const cached = geometries.get(key);
       if (cached) return cached;
 
-      const { contours, width, height } = contoursForWord(
+      const { contours, path, width, height } = contoursForWord(
         word,
         axes,
         tolerance,
@@ -916,6 +1001,7 @@ export async function loadGlyphSource(
         contours: contours.map((c) => Float32Array.from(c.points)),
         triangles: Float32Array.from(mesh),
         triangleCount,
+        path,
         width,
         height,
       };
