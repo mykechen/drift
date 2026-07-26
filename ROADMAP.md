@@ -14,7 +14,7 @@ Phases are annotated as they complete, including where the plan turned out to be
 | --- | --- |
 | 0 — Environment and skeleton | **done** |
 | 1 — The property model | **done**, all exit criteria met |
-| 2 — Words as physics bodies | **feel test 1 passes.** SDF not started; rotation open |
+| 2 — Words as physics bodies | **feel test 1 passes; rotation resolved.** SDF not started |
 | 2.5 — Payload | **not started** (added after Phase 2 — see below) |
 | 3–9 | not started |
 
@@ -100,7 +100,7 @@ Now that words have properties, make them things.
 - [x] Physics substepping and density-aware framerate management. — 120Hz below 100 bodies, 60Hz above, sampled once per frame so the timestep is never variable *within* a frame.
 - [x] Sleep management with tuned thresholds. — **not by tuning thresholds.** Rapier's JS bindings do not expose them, and sleeping is island-based so a full pile never qualifies. Settled words are converted to *static* bodies instead. A full 200-word room steps in 10.5ms p50 against a 16.7ms budget and reaches 200/200 frozen.
 - [x] Angular velocity damping. — implemented, but see the open item below: damping alone does not produce the specified outcome.
-- [ ] **Words settle at arbitrary angles.** Median rotation 98.6°, max 179.4° in a settled room — half of them sideways or upside down. `CLAUDE.md` asks for "tumble slightly and settle flat" and a room of unreadable words fights the premise of the piece. This is a feel decision, not a tuning one: lock rotation, add a restoring torque toward upright, or accept a jumble and clamp only the extremes. Note that a restoring torque applied every step would prevent freezing, which is what keeps a full room inside budget.
+- [x] **Words settle at arbitrary angles — resolved.** First shipped as a hard rotation lock; then reworked into a lifecycle when the lock read as dead. A word now tumbles freely while moving and a mass-scaled restoring torque eases it upright as it slows. The freeze conflict the note warned about was real and was solved by keying freeze on *linear* stillness alone, so the torque never blocks it. Settled median tilt ~7–10° (an organic lean, not the lock's pristine 3.5°). Full reasoning in `docs/build-log.md`.
 - [x] In-progress word rendered at the cursor at neutral axes. — not originally listed; added because the piece cannot be judged without seeing what you are typing.
 
 **Exit criteria:** feel test #1 passes — typing `boulder` and `feather` produces undeniably different physical behavior. — **met.** Boulder accelerates to the floor in ~1133ms; feather descends near-linearly at terminal velocity in ~1863ms. The difference is the *shape* of the fall, not only its speed.
@@ -262,14 +262,15 @@ Carried items that belong to no single phase. Each is recorded in `docs/build-lo
 
 | Debt | Where it lands | Why it matters |
 | --- | --- | --- |
-| Words settle at arbitrary angles | Phase 2 | A room of unreadable words fights the premise |
-| Freezing prevents drift | Phase 5a | Feel test 2 is entirely about drift |
+| ~~Words settle at arbitrary angles~~ | ~~Phase 2~~ | **Resolved** — rotation lifecycle, freeze keyed on linear stillness |
+| Freezing prevents drift | Phase 5a | Feel test 2 is entirely about drift. **Note:** wake-on-impact now unfreezes struck words, which is a partial precedent for the mechanism 5a needs |
 | ~3MB payload | Phase 2.5 | Lighthouse 100 is an exit criterion |
 | Proper nouns and slurs in the vocabulary | Phase 8 | Launch-ending if missed |
 | Mono face undecided | Phase 3 | Two spec documents say "the mono face" |
 | `age` axis has no visual consequence | Phase 3 | Open since Phase 1a |
 | Character branch reads warm, not light | Phase 3 | Judge as colour, not as numbers |
-| Every word spawns at x=0 | Phase 3 / 5a | Cursor safe-zone and gravity are the intended answers — verify they are |
+| ~~Every word spawns at x=0~~ | ~~Phase 3 / 5a~~ | **Resolved** — the cursor follows the mouse; words land where you aim |
+| Step-cost p50 unverified since the physics rework | Phase 2 | Free rotation + collision events + per-step work were added; needs a foreground-Chrome reading against 16.7ms |
 | Domain TBD | Phase 8 | Watermark and OG image need it |
 
 ---
