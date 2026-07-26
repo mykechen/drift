@@ -43,13 +43,16 @@ const TEXELS_PER_EM = 64;
 /**
  * How far the field reaches beyond the ink, in em.
  *
- * The shader needs distance on both sides of the edge to antialias, and later
- * phases need more of it than that — DESIGN.md's shadow is a blurred offset of
- * this same silhouette, and reading it out of the field costs nothing if the
- * range is there. Too wide wastes texels on empty paper; this is about two
- * pixels at native size and forty at the largest sane zoom.
+ * The shader needs distance on both sides of the edge to antialias, but the
+ * number is set by the *shadow*, which is a blurred offset of this same
+ * silhouette read out of this same texture. A shadow can only reach as far as
+ * the field knows, so this is the ceiling on how soft a heavy word's shadow can
+ * be. 0.08 was the first value and it was too tight: at roughly 36 pixels to
+ * the em it capped the blur at about a pixel, which is a shadow nobody can see.
+ * Widening to 0.14 costs about 15% more texels — the field grows by the margin
+ * on each side, not by area — and buys a shadow that reads.
  */
-export const SPREAD_EM = 0.08;
+export const SPREAD_EM = 0.14;
 
 /**
  * Supersampling factor for the mask the distance transform runs on.

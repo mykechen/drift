@@ -1453,3 +1453,59 @@ two pipelines were separated in the first place, and why the flattening
 tolerance can stay coarse enough for 200 bodies — but it does mean
 `/debug/glyphs` is now the *only* view of what the physics actually sees, which
 raises its value rather than lowering it.
+
+---
+
+## Phase 3 — shadows and semantic tint
+
+The two design items the SDF unlocked, done first because they cost almost
+nothing once the field exists.
+
+**The shadow is the same texture, read differently.** No second field, no blur
+pass, no render target: a shadow is the word's own distance field thresholded
+with a wide ramp that starts at the letter's edge and falls away outward, rather
+than a narrow one straddling it. That is what makes it read as cast light rather
+than as a fattened copy of the word. It costs one extra quad and no extra
+memory. `mass` drives both the blur width and the drop, so the shadow and the
+letterform thicken together off the same score.
+
+**Two layers, not one.** Every shadow draws beneath every word, not just beneath
+its own. With the depth buffer off, draw order *is* stacking order, and a single
+layer let a word's shadow fall across the letters of a neighbour committed
+earlier.
+
+**The first values were invisible, and the field was why.** `SPREAD_EM` was
+0.08, which is the ceiling on how far a shadow can reach — the field simply does
+not know about distances beyond it. At roughly 36 pixels to the em that capped
+the blur at about one pixel. The mechanism was correct the whole time and could
+be proved so by counting pixels in the shadow's brightness range (1,466 of
+them), but nothing was visible to the eye. Widening the spread to 0.14 costs
+about 15% more texels — the field grows by its margin on each side, not by area
+— and buys a shadow that reads.
+
+A related thing worth knowing, and not a bug: **a word resting on the floor has
+no visible shadow**, because the floor is the bottom edge of the frame and the
+shadow falls below it. Shadows appear on the *pile*, where words rest on other
+words. That is physically right and it means the effect is invisible in a
+near-empty room, which is worth the author's eye.
+
+**Semantic tint** interpolates `INK_COOLEST` → `INK` → `INK_WARMEST` across
+warmth, in two segments so a neutral word lands exactly on `INK` rather than
+somewhere between the extremes. It reads exactly as DESIGN.md asks: the room is
+monochrome at a glance and `marble` is visibly cooler than `cedar` on
+inspection.
+
+The in-progress word gets neutral ink and, per DESIGN.md, **no shadow** — it is
+not a physical object yet, and nothing that has not landed should look like it
+is resting on anything.
+
+**Cost, measured.** A bake is 4.7ms p50 (from 4.1ms, for the wider field). A
+166-word room now issues 332 draw calls and holds **11.3ms p50 / 13.5ms p95**
+frames against a 16.7ms budget — measured through the throttled driver, so the
+real figure is better.
+
+> **The shadow numbers are the author's to tune.** DESIGN.md fixes the colour
+> and opacity (`#000000` at 8%) but not the blur or the drop, and those are
+> judgement. The current values were chosen to be *visible* after the first pass
+> was not; whether they are now too visible for a piece this quiet is a feel
+> question.

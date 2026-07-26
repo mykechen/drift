@@ -7,11 +7,42 @@ import {
   Texture,
   Transform,
 } from "ogl";
-import { BACKGROUND, INK } from "../design/palette";
+import {
+  BACKGROUND,
+  inkForWarmth,
+  SHADOW_BLUR_EM_HEAVIEST,
+  SHADOW_BLUR_EM_LIGHTEST,
+  SHADOW_COLOR,
+  SHADOW_DROP_EM_HEAVIEST,
+  SHADOW_DROP_EM_LIGHTEST,
+  SHADOW_OPACITY,
+} from "../design/palette";
 import type { WordOutline, WordPath } from "./glyphs";
 import type { WordBody } from "./physics";
 import { createSdfBaker, SPREAD_EM, type SdfField } from "./sdf";
 import { debug } from "../util/debug";
+
+/**
+ * The ink of a word and the shadow it casts, drawn from one field.
+ *
+ * `shadow` is null for the in-progress word: per DESIGN.md there is no shadow
+ * beneath the letters being typed. The draft is not a physical object yet, and
+ * nothing that has not landed should look like it is resting on anything.
+ */
+interface WordMeshes {
+  readonly ink: Mesh;
+  readonly shadow: Mesh | null;
+}
+
+/** Map a score in [-1, 1] onto a range. */
+function acrossMass(
+  mass: number,
+  atLightest: number,
+  atHeaviest: number,
+): number {
+  const t = (Math.max(-1, Math.min(1, mass)) + 1) / 2;
+  return atLightest + t * (atHeaviest - atLightest);
+}
 
 /** Retina is worth paying for; 3× displays are not. */
 const MAX_DEVICE_PIXEL_RATIO = 2;
@@ -72,12 +103,19 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform vec3 uInk;
   uniform float uAlpha;
   uniform float uEdgeSoftness;
+  // 0 for ink, the blur half-width in field units for a shadow. A shadow is the
+  // same silhouette read with a wide ramp that starts at the letter's edge and
+  // falls away outward, rather than a narrow one straddling it — which is what
+  // makes it read as cast rather than as a fattened copy of the word.
+  uniform float uBlur;
 
   varying vec2 vUv;
 
   void main() {
     float distance = texture2D(uField, vUv).r;
-    float coverage = smoothstep(0.5 - uEdgeSoftness, 0.5 + uEdgeSoftness, distance);
+    float lower = uBlur > 0.0 ? 0.5 - 2.0 * uBlur : 0.5 - uEdgeSoftness;
+    float upper = uBlur > 0.0 ? 0.5 : 0.5 + uEdgeSoftness;
+    float coverage = smoothstep(lower, upper, distance);
     if (coverage <= 0.0) discard;
     gl_FragColor = vec4(uInk, uAlpha * coverage);
   }
@@ -144,12 +182,25 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   gl.clearColor(background.r, background.g, background.b, 1);
 
   const scene = new Transform();
-  const ink = new Color(INK);
-  const meshes = new Map<number, Mesh>();
-  /** Words being crushed out of existence: mesh + when the animation started. */
-  const crushing = new Map<number, { mesh: Mesh; startMs: number }>();
+
+  /**
+   * Two layers, so every shadow is drawn beneath every word rather than beneath
+   * only its own. With the depth buffer off, draw order *is* stacking order —
+   * one layer would let a word's shadow fall across the letters of a neighbour
+   * committed before it.
+   */
+  const shadowLayer = new Transform();
+  const inkLayer = new Transform();
+  shadowLayer.setParent(scene);
+  inkLayer.setParent(scene);
+
+  const shadow = new Color(SHADOW_COLOR);
+  /** A word's two meshes: the ink, and the shadow it casts. */
+  const meshes = new Map<number, WordMeshes>();
+  /** Words being crushed out of existence: meshes + when the animation started. */
+  const crushing = new Map<number, { meshes: WordMeshes; startMs: number }>();
   /** The word being typed. One at a time, replaced wholesale on each keystroke. */
-  let draft: Mesh | null = null;
+  let draft: WordMeshes | null = null;
 
   /**
    * OGL's `setSize` writes inline `width`/`height` pixel styles onto the canvas
@@ -283,46 +334,113 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           // [x, y] multiplier, 1 until the word is being crushed flat.
           uSquash: { value: [1, 1] },
           uRoomHalfExtent: { value: [1, 1] },
-          uInk: { value: [ink.r, ink.g, ink.b] },
+          uInk: { value: [0, 0, 0] },
           uAlpha: { value: 1 },
           uEdgeSoftness: { value: 0.1 },
+          uBlur: { value: 0 },
         },
       }),
     });
   }
 
+  /**
+   * Build a word's ink and its shadow.
+   *
+   * Both read the same field — the shadow costs one extra quad and no extra
+   * texture, which is why `SPREAD_EM` was made wide enough to hold a blur in the
+   * first place. `mass` sets the blur and the drop; `warmth` sets the ink's hue.
+   */
+  function buildWord(
+    path: WordPath,
+    emWidth: number,
+    emHeight: number,
+    mass: number,
+    warmth: number,
+    castsShadow: boolean,
+  ): WordMeshes | null {
+    const inkMesh = buildMesh(path, emWidth, emHeight);
+    if (!inkMesh) return null;
+
+    const tint = inkForWarmth(warmth);
+    (inkMesh.program.uniforms["uInk"] as { value: number[] }).value = tint;
+    inkMesh.setParent(inkLayer);
+
+    if (!castsShadow) return { ink: inkMesh, shadow: null };
+
+    const shadowMesh = buildMesh(path, emWidth, emHeight);
+    if (!shadowMesh) return { ink: inkMesh, shadow: null };
+
+    const blurEm = acrossMass(
+      mass,
+      SHADOW_BLUR_EM_LIGHTEST,
+      SHADOW_BLUR_EM_HEAVIEST,
+    );
+    const shadowUniforms = shadowMesh.program.uniforms;
+    (shadowUniforms["uInk"] as { value: number[] }).value = [
+      shadow.r,
+      shadow.g,
+      shadow.b,
+    ];
+    (shadowUniforms["uAlpha"] as { value: number }).value = SHADOW_OPACITY;
+    // The field spans 2×SPREAD_EM across its full range, so an em converts to
+    // field units by dividing by that.
+    (shadowUniforms["uBlur"] as { value: number }).value =
+      blurEm / (2 * SPREAD_EM);
+
+    shadowMesh.setParent(shadowLayer);
+    return { ink: inkMesh, shadow: shadowMesh };
+  }
+
+  /** How far below the word its shadow falls, in em. */
+  function shadowDropFor(mass: number): number {
+    return acrossMass(mass, SHADOW_DROP_EM_LIGHTEST, SHADOW_DROP_EM_HEAVIEST);
+  }
+
+  function detach(pair: WordMeshes): void {
+    pair.ink.setParent(null);
+    pair.shadow?.setParent(null);
+  }
+
   function attach(body: WordBody): void {
     const { path, width, height } = body.geometry;
-    const mesh = buildMesh(path, width, height);
-    if (!mesh) return;
-    mesh.setParent(scene);
-    meshes.set(body.id, mesh);
+    const pair = buildWord(
+      path,
+      width,
+      height,
+      body.scores.mass,
+      body.scores.warmth,
+      true,
+    );
+    if (!pair) return;
+    meshes.set(body.id, pair);
   }
 
   function setDraft(outline: WordOutline | null): void {
     if (draft) {
-      draft.setParent(null);
+      detach(draft);
       draft = null;
     }
     if (!outline) return;
-    draft = buildMesh(outline.path, outline.width, outline.height);
-    if (draft) draft.setParent(scene);
+    // The uncommitted word renders at neutral axes, so it gets neutral ink —
+    // the model's opinion arrives on commit, and that includes its opinion
+    // about colour. No shadow, per DESIGN.md.
+    draft = buildWord(outline.path, outline.width, outline.height, 0, 0, false);
   }
 
   function crush(id: number): void {
-    const mesh = meshes.get(id);
-    if (!mesh) return;
+    const pair = meshes.get(id);
+    if (!pair) return;
     meshes.delete(id);
-    // The mesh keeps the transform the last frame gave it, so it presses flat
-    // exactly where the word was sitting. performance.now is fine here — this is
-    // wall-clock exit polish, not simulation.
-    crushing.set(id, { mesh, startMs: performance.now() });
+    // The meshes keep the transform the last frame gave them, so the word
+    // presses flat exactly where it was sitting. performance.now is fine here —
+    // this is wall-clock exit polish, not simulation.
+    crushing.set(id, { meshes: pair, startMs: performance.now() });
   }
 
   function detachAll(): void {
-    for (const mesh of meshes.values()) mesh.setParent(null);
+    for (const pair of meshes.values()) detach(pair);
     meshes.clear();
-    for (const { mesh } of crushing.values()) mesh.setParent(null);
+    for (const entry of crushing.values()) detach(entry.meshes);
     crushing.clear();
     setDraft(null);
   }
@@ -360,15 +478,25 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       const edgeSoftness =
         pixelsPerEm > 0 ? 1 / pixelsPerEm / (2 * SPREAD_EM) : 0.1;
 
-      for (const body of bodies) {
-        const mesh = meshes.get(body.id);
-        if (!mesh) continue;
+      /**
+       * Point one mesh at a place in the room. The shadow gets the same
+       * transform as its word plus a downward drop, so it stays put under a
+       * word that tumbles — a shadow that rotated with the letters would read as
+       * a second word lying behind the first rather than as light falling.
+       */
+      function place(
+        mesh: Mesh,
+        x: number,
+        y: number,
+        rotation: number,
+        drop: number,
+      ): void {
         const uniforms = mesh.program.uniforms;
         (uniforms["uTranslation"] as { value: number[] }).value = [
-          body.x,
-          body.y,
+          x,
+          y - drop * wordScale,
         ];
-        (uniforms["uRotation"] as { value: number }).value = body.rotation;
+        (uniforms["uRotation"] as { value: number }).value = rotation;
         (uniforms["uScale"] as { value: number }).value = wordScale;
         (uniforms["uEdgeSoftness"] as { value: number }).value = edgeSoftness;
         (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
@@ -376,45 +504,66 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           roomHalfHeight,
         ];
       }
+
+      for (const body of bodies) {
+        const pair = meshes.get(body.id);
+        if (!pair) continue;
+        place(pair.ink, body.x, body.y, body.rotation, 0);
+        if (pair.shadow) {
+          place(
+            pair.shadow,
+            body.x,
+            body.y,
+            body.rotation,
+            shadowDropFor(body.scores.mass),
+          );
+        }
+      }
+
       if (crushing.size > 0) {
         const now = performance.now();
         for (const [id, entry] of crushing) {
           const t = (now - entry.startMs) / CRUSH_FADE_MS;
           if (t >= 1) {
-            entry.mesh.setParent(null);
+            detach(entry.meshes);
             crushing.delete(id);
             continue;
           }
-          const uniforms = entry.mesh.program.uniforms;
           // Press thin and spread slightly wide, fading as it flattens. Scale and
           // room extent are refreshed in case the room resized mid-crush.
-          (uniforms["uSquash"] as { value: number[] }).value = [
-            1 + 0.35 * t,
-            Math.max(0.04, 1 - t),
-          ];
-          (uniforms["uAlpha"] as { value: number }).value = 1 - t;
-          (uniforms["uScale"] as { value: number }).value = wordScale;
-          (uniforms["uEdgeSoftness"] as { value: number }).value = edgeSoftness;
-          (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
-            roomHalfWidth,
-            roomHalfHeight,
-          ];
+          const squash = [1 + 0.35 * t, Math.max(0.04, 1 - t)];
+          const both = entry.meshes.shadow
+            ? [entry.meshes.shadow, entry.meshes.ink]
+            : [entry.meshes.ink];
+          for (const mesh of both) {
+            const uniforms = mesh.program.uniforms;
+            (uniforms["uSquash"] as { value: number[] }).value = squash;
+            (uniforms["uScale"] as { value: number }).value = wordScale;
+            (uniforms["uEdgeSoftness"] as { value: number }).value =
+              edgeSoftness;
+            (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
+              roomHalfWidth,
+              roomHalfHeight,
+            ];
+          }
+          const inkAlpha = entry.meshes.ink.program.uniforms["uAlpha"] as {
+            value: number;
+          };
+          inkAlpha.value = 1 - t;
+          if (entry.meshes.shadow) {
+            const shadowAlpha = entry.meshes.shadow.program.uniforms[
+              "uAlpha"
+            ] as { value: number };
+            shadowAlpha.value = SHADOW_OPACITY * (1 - t);
+          }
         }
       }
 
       if (draft) {
-        const uniforms = draft.program.uniforms;
         // The draft is centred on the cursor — which follows the mouse in x —
         // rather than growing rightward from a caret, so it sits exactly where
         // the committed body will spawn (DESIGN.md: words land at the cursor).
-        (uniforms["uTranslation"] as { value: number[] }).value = [cursorX, 0];
-        (uniforms["uRotation"] as { value: number }).value = 0;
-        (uniforms["uScale"] as { value: number }).value = wordScale;
-        (uniforms["uEdgeSoftness"] as { value: number }).value = edgeSoftness;
-        (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
-          roomHalfWidth,
-          roomHalfHeight,
-        ];
+        place(draft.ink, cursorX, 0, 0, 0);
       }
 
       renderer.render({ scene });
