@@ -7,8 +7,9 @@
  * this file is only the order of them.
  *
  * Split out of `main.ts` in Phase 2.5. `main.ts` decides whether this module is
- * worth downloading at all, and everything expensive — Rapier, OGL, fontkit,
- * the ONNX runtime, the model — hangs off this side of that decision.
+ * worth downloading at all, and everything expensive — Rapier, OGL, the baked
+ * glyph outlines, the ONNX runtime, the model — hangs off this side of that
+ * decision.
  *
  * Phase 2 draws bodies as flat fills of their own triangulation. The SDF that
  * replaces it lands in Phase 3 — per ROADMAP the piece is meant to be
@@ -61,12 +62,13 @@ async function commitWord(
  *
  * **Nothing waits on the network that does not have to.** Until Phase 2.5 this
  * awaited all three loads together and drew its first frame after the last of
- * them — so the visitor sat on a blank page until 2.9MB of font, ONNX runtime
- * and model had arrived, for a room that is empty anyway. Now the two fetches
- * are started first and left in flight, the room is built from Rapier alone —
- * which is local, since the `-compat` build carries its WebAssembly inline —
- * and the frame loop starts against the empty room immediately. Typing is
- * enabled when the assets that typing actually needs have landed.
+ * them — so the visitor sat on a blank page until ~2.7MB of outlines, ONNX
+ * runtime and model had arrived, for a room that is empty anyway. Now the two
+ * fetches are started first and left in flight, the room is built from Rapier
+ * — which has already been instantiated by the time this module's body runs,
+ * since its `.wasm` is a static import of this chunk — and the frame loop
+ * starts against the empty room immediately. Typing is enabled when the assets
+ * that typing actually needs have landed.
  *
  * The staging is deliberately conservative: input waits for the *model*, not
  * just the font. Committing a word before the model can score it would give it
@@ -90,7 +92,7 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
     }),
   ]);
 
-  const room = await createPhysicsRoom(renderer.aspect());
+  const room = createPhysicsRoom(renderer.aspect());
 
   window.addEventListener("resize", (): void => {
     renderer.resize();

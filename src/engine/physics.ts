@@ -10,7 +10,7 @@
  * physics is identical on every display and only the final draw scales.
  */
 
-import RAPIER from "@dimforge/rapier2d-compat";
+import RAPIER from "@dimforge/rapier2d";
 import type { WordGeometry } from "./glyphs";
 import type { PropertyScores } from "../ml/properties";
 import { debug } from "../util/debug";
@@ -373,12 +373,22 @@ function fallResistance(scores: PropertyScores): number {
 }
 
 /**
- * Build the world. Rapier's WebAssembly must be initialised first, which is why
- * this is async and why `RAPIER.init()` lives here rather than at module scope.
+ * Build the world.
+ *
+ * There is no `RAPIER.init()` call any more. Phase 2.5 moved off the `-compat`
+ * build, which carried its WebAssembly base64-inlined in the JavaScript and had
+ * to be handed to an explicit async initialiser; the ESM build imports the
+ * `.wasm` as a module and the loader instantiates it before this module's body
+ * ever runs. That is worth 121 KB brotli — base64 inside JS compresses far
+ * worse than the binary does — and it lets the browser cache the engine as its
+ * own file.
+ *
+ * It is therefore *synchronous*. It was `async` only ever to hold that
+ * initialiser, and keeping the promise for symmetry's sake would mean an async
+ * function with nothing to await — which the lint rejects, correctly, since it
+ * would advertise a wait that cannot happen.
  */
-export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
-  await RAPIER.init();
-
+export function createPhysicsRoom(aspect: number): PhysicsRoom {
   const world = new RAPIER.World({ x: 0, y: GRAVITY_UNITS_PER_S2 });
   const bodies: WordBody[] = [];
   const handles = new Map<number, RAPIER.RigidBody>();

@@ -15,7 +15,16 @@ export default defineConfig({
     // esbuild dependency pre-bundle rewrites those names and the runtime dies
     // on load with a "not a function" from inside its own loader. Excluding it
     // serves the published file untouched, which is what it expects.
-    exclude: ["onnxruntime-web"],
+    //
+    // Rapier's ESM build is excluded for a related but distinct reason. It
+    // reaches its WebAssembly through `import * as wasm from "./…_bg.wasm"`,
+    // and the wasm-bindgen glue beside it expects to be handed those exports
+    // via `__wbg_set_wasm`. The dependency pre-bundle flattens the two into one
+    // file and the hand-off does not survive: the module loads, and then the
+    // first `createRigidBody` dies reading `.memory` of undefined. The
+    // production build never had the problem, which is the trap — this only
+    // breaks in `pnpm dev`.
+    exclude: ["onnxruntime-web", "@dimforge/rapier2d"],
   },
 
   build: {

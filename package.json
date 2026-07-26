@@ -29,7 +29,7 @@
     "vite": "^8.1.5"
   },
   "dependencies": {
-    "@dimforge/rapier2d-compat": "^0.19.3",
+    "@dimforge/rapier2d": "^0.19.3",
     "earcut": "^3.2.3",
     "ogl": "^1.0.11",
     "onnxruntime-web": "^1.27.0"
