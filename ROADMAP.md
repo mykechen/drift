@@ -14,7 +14,7 @@ Phases are annotated as they complete, including where the plan turned out to be
 | --- | --- |
 | 0 — Environment and skeleton | **done** |
 | 1 — The property model | **done**, all exit criteria met |
-| 2 — Words as physics bodies | **feel test 1 passes; rotation resolved.** SDF not started |
+| 2 — Words as physics bodies | **done** — feel test 1 passes, rotation resolved, SDF shipped |
 | 2.5 — Payload | **done**, all exit criteria met |
 | 3–9 | not started |
 
@@ -86,14 +86,14 @@ The floor. Everything else stands on this.
 
 ---
 
-## Phase 2 — Words as physics bodies (1.5–2 weeks) — **exit criteria met, two items open**
+## Phase 2 — Words as physics bodies (1.5–2 weeks) — **done**
 
 Now that words have properties, make them things.
 
 - [x] Glyph outline extraction with fontkit. Load Archivo variable; extract outlines for any word at arbitrary `wght`/`wdth`.
 - [x] Convex decomposition of glyph paths via earcut, classifying contours by winding. Verify manually on `o`, `e`, `p`, `d`, `g`, `a`, `b`, `q` — and on `i`, whose two contours are both outer, which is the case a naive implementation gets wrong. — verified by eye at `/debug/glyphs`, which draws hulls as translucent fills over the true outline.
-- [ ] SDF atlas generation (build-time or first-load). **Not started.** Words currently draw as flat fills of the same triangulation their colliders were cut from, which makes it impossible for the picture to disagree with the simulation.
-- [ ] SDF rendering shader in OGL. Crisp glyphs at any scale. **Not started.**
+- [x] ~~SDF atlas generation~~ **SDF generation — per word, at commit, not an atlas.** An MSDF glyph atlas cannot serve this piece: `wght` and `wdth` move per word, so the atlas would have to cover the axis grid (100 glyphs × 18 samples) and would put back much of the payload Phase 2.5 removed — and blending two rasterised fields is not the same operation as interpolating outlines. Instead `Path2D` rasterises the baked quadratics and an 8SSEDT turns the mask into a field, cached against the same object the hulls are. 4.1ms p50 a word, 8.4ms at sixteen characters.
+- [x] SDF rendering shader in OGL. Crisp glyphs at any scale. — edge softness comes in as a uniform rather than from `fwidth`: the room knows exactly how many pixels an em covers, so estimating it would be both less portable and less correct.
 - [x] Wire variable font axes (`wght` ← mass, `wdth` ← intensity) to property scores.
 - [x] Rapier 2D world set up. Gravity down. Canvas boundaries as walls (bottom + sides), open top.
 - [x] Commit pipeline: word → outlines → convex hulls → Rapier compound body with mass/drag/restitution from properties.
@@ -276,7 +276,8 @@ Carried items that belong to no single phase. Each is recorded in `docs/build-lo
 | `age` axis has no visual consequence | Phase 3 | Open since Phase 1a |
 | Character branch reads warm, not light | Phase 3 | Judge as colour, not as numbers |
 | ~~Every word spawns at x=0~~ | ~~Phase 3 / 5a~~ | **Resolved** — the cursor follows the mouse; words land where you aim |
-| Step-cost p50 unverified since the physics rework | Phase 2 | Free rotation + collision events + per-step work were added; needs a foreground-Chrome reading against 16.7ms |
+| ~~Step-cost p50 unverified since the physics rework~~ | ~~Phase 2~~ | **Resolved** — 6.2ms p50 with 199 bodies awake, against a 16.7ms budget |
+| Crush clears faster than the density cap | Phase 3 | 358 commits to reach 198 bodies; DESIGN.md's soft-cap-at-200 aging may never trigger |
 | Domain TBD | Phase 8 | Watermark and OG image need it |
 
 ---
