@@ -16,11 +16,7 @@ import {
   type GlyphSource,
   type WordGeometry,
 } from "../engine/glyphs";
-import {
-  DISPLAY_FONT_URL,
-  NEUTRAL_AXES,
-  type FontAxes,
-} from "../design/typography";
+import { NEUTRAL_AXES, type FontAxes } from "../design/typography";
 
 /** Glyphs whose decomposition is load-bearing, per DESIGN.md's sixth behaviour. */
 const FAILURE_CASES = ["o", "e", "a", "b", "d", "g", "p", "q", "i", "s"];
@@ -233,11 +229,11 @@ wdthEl.addEventListener("input", renderAll);
 tolEl.addEventListener("input", renderAll);
 
 const startedAt = performance.now();
-loadGlyphSource(DISPLAY_FONT_URL)
+loadGlyphSource()
   .then((loaded) => {
     source = loaded;
     const loadMs = performance.now() - startedAt;
-    statusEl.textContent = `Archivo · wght ${String(NEUTRAL_AXES.wght)} wdth ${String(NEUTRAL_AXES.wdth)} neutral · parsed in ${loadMs.toFixed(0)}ms`;
+    statusEl.textContent = `Archivo · wght ${String(NEUTRAL_AXES.wght)} wdth ${String(NEUTRAL_AXES.wdth)} neutral · decoded in ${loadMs.toFixed(0)}ms`;
     wordEl.disabled = false;
     renderAll();
     wordEl.focus();

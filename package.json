@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "measure": "node scripts/measure-payload.ts",
+    "bake:glyphs": "node scripts/build-glyph-outlines.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -21,6 +22,7 @@
     "@types/fontkit": "^2.0.9",
     "eslint": "^10.7.0",
     "eslint-config-prettier": "^10.1.8",
+    "fontkit": "^2.0.4",
     "prettier": "^3.9.6",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
@@ -29,7 +31,6 @@
   "dependencies": {
     "@dimforge/rapier2d-compat": "^0.19.3",
     "earcut": "^3.2.3",
-    "fontkit": "^2.0.4",
     "ogl": "^1.0.11",
     "onnxruntime-web": "^1.27.0"
   }

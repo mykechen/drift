@@ -9,8 +9,14 @@
 
 import type { PropertyScores } from "../ml/properties";
 
-/** The display face. Variable, `wght` 100–900 and `wdth` 62–125. */
-export const DISPLAY_FONT_URL = "/fonts/Archivo.ttf";
+/**
+ * The display face is Archivo, variable across `wght` 100–900 and `wdth`
+ * 62–125 — but nothing at runtime loads it any more. Phase 2.5 moved outline
+ * extraction to build time, so `public/fonts/Archivo.ttf` is now an input to
+ * `scripts/build-glyph-outlines.ts` rather than something a visitor downloads.
+ * The ranges the piece actually uses are the two constants below, and they are
+ * what that script samples.
+ */
 
 /**
  * What an uncommitted word renders at, per `DESIGN.md` — the neutral values the

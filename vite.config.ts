@@ -2,10 +2,12 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  // `.onnx` is not one of Vite's known asset extensions, so the model would be
-  // treated as a module and fail to parse. Declaring it here means an
-  // `import ... from "*.onnx?url"` emits the file and returns its hashed URL.
-  assetsInclude: ["**/*.onnx"],
+  // Neither `.onnx` nor `.bin` is one of Vite's known asset extensions, so the
+  // model and the baked glyph outlines would be treated as modules and fail to
+  // parse. Declaring them here means an `import ... from "*.onnx?url"` emits
+  // the file and returns its hashed URL — which also puts both under Vercel's
+  // default immutable caching for fingerprinted output.
+  assetsInclude: ["**/*.onnx", "**/*.bin"],
 
   optimizeDeps: {
     // ONNX Runtime Web ships pre-minified with its WebAssembly glue inlined and

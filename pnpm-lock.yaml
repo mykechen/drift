@@ -14,9 +14,6 @@ importers:
       earcut:
         specifier: ^3.2.3
         version: 3.2.3
-      fontkit:
-        specifier: ^2.0.4
-        version: 2.0.4
       ogl:
         specifier: ^1.0.11
         version: 1.0.11
@@ -39,6 +36,9 @@ importers:
       eslint-config-prettier:
         specifier: ^10.1.8
         version: 10.1.8(eslint@10.7.0)
+      fontkit:
+        specifier: ^2.0.4
+        version: 2.0.4
       prettier:
         specifier: ^3.9.6
         version: 3.9.6

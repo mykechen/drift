@@ -15,10 +15,19 @@
  *
  * Coordinates are em units — font units divided by `unitsPerEm` — with the
  * word centred on its own bounding box. Callers scale to world units.
+ *
+ * **There is no font parser here.** Phase 2.5 moved outline extraction to build
+ * time: `scripts/build-glyph-outlines.ts` evaluates Archivo across a grid of
+ * axis samples and writes `glyph-outlines.bin`, and this file interpolates
+ * between those samples. That took fontkit (~133 KB) and `Archivo.ttf`
+ * (~192 KB) off the wire for ~107 KB of baked outlines. What is baked is the
+ * raw quadratic control points, not flattened polygons, so every line of the
+ * geometry pipeline below is unchanged and the flattening tolerance is still a
+ * runtime knob.
  */
 
-import * as fontkit from "fontkit";
 import earcut from "earcut";
+import outlinesUrl from "./glyph-outlines.bin?url";
 import type { FontAxes } from "../design/typography";
 
 /**
@@ -48,6 +57,16 @@ export const FLATTEN_TOLERANCE_EM = 1 / 32;
 
 /** Guard against a pathological curve subdividing without bound. */
 const MAX_SEGMENTS_PER_CURVE = 16;
+
+/** Command ids, mirrored from `scripts/build-glyph-outlines.ts`. */
+const COMMAND_MOVE_TO = 0;
+const COMMAND_LINE_TO = 1;
+const COMMAND_QUADRATIC_TO = 2;
+const COMMAND_CLOSE_PATH = 3;
+
+/** Header magic, `DGLY` little-endian. A stale file must fail loudly. */
+const OUTLINE_MAGIC = 0x59_4c_47_44;
+const OUTLINE_VERSION = 1;
 
 /**
  * Axis values are rounded to this before being used as a cache key.
@@ -229,9 +248,17 @@ function signedAreaOf(points: readonly number[]): number {
   return total;
 }
 
-/** Flatten one glyph's path into closed polygonal contours, offset into place. */
-function contoursForGlyph(
-  glyph: fontkit.Glyph,
+/**
+ * Flatten one baked entry's path into closed polygonal contours, offset into
+ * place.
+ *
+ * Takes the command ids and a flat coordinate array rather than a parsed font
+ * glyph. The command stream is what the bake wrote and its arity is fixed:
+ * moveTo and lineTo consume two coordinates, a quadratic four, closePath none.
+ */
+function contoursForEntry(
+  commands: Uint8Array,
+  coordinates: Float32Array,
   offsetX: number,
   scale: number,
   tolerance: number,
@@ -258,24 +285,25 @@ function contoursForGlyph(
     points = [];
   }
 
-  for (const command of glyph.path.commands) {
-    const args = command.args;
-    switch (command.command) {
-      case "moveTo": {
-        finish();
-        cursorX = args[0]!;
-        cursorY = args[1]!;
+  let read = 0;
+  for (const command of commands) {
+    switch (command) {
+      case COMMAND_MOVE_TO:
+      case COMMAND_LINE_TO: {
+        // A moveTo opens a new contour; a lineTo continues the current one.
+        if (command === COMMAND_MOVE_TO) finish();
+        cursorX = coordinates[read]!;
+        cursorY = coordinates[read + 1]!;
+        read += 2;
         push(cursorX, cursorY);
         break;
       }
-      case "lineTo": {
-        cursorX = args[0]!;
-        cursorY = args[1]!;
-        push(cursorX, cursorY);
-        break;
-      }
-      case "quadraticCurveTo": {
-        const [cx, cy, x1, y1] = args as [number, number, number, number];
+      case COMMAND_QUADRATIC_TO: {
+        const cx = coordinates[read]!;
+        const cy = coordinates[read + 1]!;
+        const x1 = coordinates[read + 2]!;
+        const y1 = coordinates[read + 3]!;
+        read += 4;
         const steps = segmentsForQuadratic(
           cursorX * scale,
           cursorY * scale,
@@ -297,35 +325,7 @@ function contoursForGlyph(
         cursorY = y1;
         break;
       }
-      case "bezierCurveTo": {
-        // Archivo is TrueType and never emits these, but a future face might.
-        const [c1x, c1y, c2x, c2y, x1, y1] = args as [
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-        ];
-        for (let step = 1; step <= MAX_SEGMENTS_PER_CURVE; step += 1) {
-          const t = step / MAX_SEGMENTS_PER_CURVE;
-          const inv = 1 - t;
-          push(
-            inv ** 3 * cursorX +
-              3 * inv * inv * t * c1x +
-              3 * inv * t * t * c2x +
-              t ** 3 * x1,
-            inv ** 3 * cursorY +
-              3 * inv * inv * t * c1y +
-              3 * inv * t * t * c2y +
-              t ** 3 * y1,
-          );
-        }
-        cursorX = x1;
-        cursorY = y1;
-        break;
-      }
-      case "closePath": {
+      case COMMAND_CLOSE_PATH: {
         finish();
         break;
       }
@@ -574,45 +574,215 @@ function hullsForShape(shape: Shape): {
 
 // --- Source -----------------------------------------------------------------
 
+/**
+ * Snap axes to the cache quantum.
+ *
+ * Geometry is built at these values, not at the raw ones, so what a cache key
+ * promises is exactly what was built. Interpolating at the raw axes instead
+ * would mean the first caller to miss the cache decides what every later
+ * caller with a near-identical request receives.
+ */
+function quantizeAxes(axes: FontAxes): FontAxes {
+  return {
+    wght: Math.round(axes.wght / AXIS_CACHE_QUANTUM) * AXIS_CACHE_QUANTUM,
+    wdth: Math.round(axes.wdth / AXIS_CACHE_QUANTUM) * AXIS_CACHE_QUANTUM,
+  };
+}
+
 function axisKey(axes: FontAxes): string {
-  const wght = Math.round(axes.wght / AXIS_CACHE_QUANTUM) * AXIS_CACHE_QUANTUM;
-  const wdth = Math.round(axes.wdth / AXIS_CACHE_QUANTUM) * AXIS_CACHE_QUANTUM;
-  return `${String(wght)}:${String(wdth)}`;
+  const snapped = quantizeAxes(axes);
+  return `${String(snapped.wght)}:${String(snapped.wdth)}`;
+}
+
+/** One baked entry: a character or a ligature, across the axis grid. */
+interface BakedEntry {
+  readonly commands: Uint8Array;
+  readonly coordinateCount: number;
+  /**
+   * `[advance, ...coordinates]` per axis sample, row-major. Sample 0 is
+   * absolute; every later sample is a *difference* from sample 0, which is how
+   * the bake keeps the file compressible.
+   */
+  readonly rows: Int16Array;
+  readonly sampleCount: number;
+}
+
+interface BakedOutlines {
+  readonly unitsPerEm: number;
+  readonly weights: number[];
+  readonly widths: number[];
+  readonly entries: Map<string, BakedEntry>;
+  /** Longest ligature in the table, so matching knows how far to look ahead. */
+  readonly longestSequence: number;
+}
+
+/** Parse `glyph-outlines.bin`. See `scripts/build-glyph-outlines.ts` for the format. */
+function decodeOutlines(buffer: ArrayBuffer): BakedOutlines {
+  const view = new DataView(buffer);
+  if (view.getUint32(0, true) !== OUTLINE_MAGIC) {
+    throw new Error("Drift: glyph-outlines.bin is not a Drift outline file.");
+  }
+  const version = view.getUint16(4, true);
+  if (version !== OUTLINE_VERSION) {
+    throw new Error(
+      `Drift: glyph-outlines.bin is version ${String(version)}, expected ${String(OUTLINE_VERSION)}. ` +
+        `Re-run \`pnpm bake:glyphs\`.`,
+    );
+  }
+
+  const unitsPerEm = view.getUint16(6, true);
+  const weightCount = view.getUint16(8, true);
+  const widthCount = view.getUint16(10, true);
+  const entryCount = view.getUint16(12, true);
+
+  let offset = 14;
+  const weights: number[] = [];
+  const widths: number[] = [];
+  for (let i = 0; i < weightCount; i += 1, offset += 2) {
+    weights.push(view.getUint16(offset, true));
+  }
+  for (let i = 0; i < widthCount; i += 1, offset += 2) {
+    widths.push(view.getUint16(offset, true));
+  }
+
+  const entries = new Map<string, BakedEntry>();
+  let longestSequence = 1;
+  const decoder = new TextDecoder("ascii");
+
+  for (let index = 0; index < entryCount; index += 1) {
+    const sequenceLength = view.getUint8(offset);
+    const commandCount = view.getUint16(offset + 1, true);
+    const coordinateCount = view.getUint16(offset + 3, true);
+    const sampleCount = view.getUint16(offset + 5, true);
+    offset += 7;
+
+    const sequence = decoder.decode(
+      new Uint8Array(buffer, offset, sequenceLength),
+    );
+    offset += sequenceLength;
+
+    const commands = new Uint8Array(buffer, offset, commandCount);
+    offset += commandCount;
+
+    const rowWidth = coordinateCount + 1;
+    // `Int16Array` over the buffer needs 2-byte alignment, which the variable
+    // command and sequence lengths do not guarantee. Copying is a few hundred
+    // kilobytes once at load, against a misalignment that throws.
+    const rows = new Int16Array(sampleCount * rowWidth);
+    for (let i = 0; i < rows.length; i += 1) {
+      rows[i] = view.getInt16(offset + i * 2, true);
+    }
+    offset += rows.length * 2;
+
+    entries.set(sequence, { commands, coordinateCount, rows, sampleCount });
+    longestSequence = Math.max(longestSequence, sequenceLength);
+  }
+
+  return { unitsPerEm, weights, widths, entries, longestSequence };
+}
+
+/** Index of the sample below `at`, and how far between it and the next one. */
+function bracket(values: readonly number[], at: number): [number, number] {
+  let upper = 1;
+  while (upper < values.length - 1 && values[upper]! < at) upper += 1;
+  const span = values[upper]! - values[upper - 1]!;
+  const t = span === 0 ? 0 : (at - values[upper - 1]!) / span;
+  return [upper - 1, Math.max(0, Math.min(1, t))];
 }
 
 /**
- * Load the display font and return a handle that turns words into geometry.
+ * Load the baked outlines and return a handle that turns words into geometry.
  *
- * Throws if the font cannot be fetched or parsed — there is no meaningful
+ * Throws if the file cannot be fetched or parsed — there is no meaningful
  * fallback, since a word with no outlines is not a body.
  */
-export async function loadGlyphSource(url: string): Promise<GlyphSource> {
+export async function loadGlyphSource(
+  url: string = outlinesUrl,
+): Promise<GlyphSource> {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(
-      `Drift: font fetch failed with ${String(response.status)}.`,
+      `Drift: glyph outline fetch failed with ${String(response.status)}.`,
     );
   }
-  // `@types/fontkit` describes the Node build, whose `create` takes a Buffer.
-  // Vite resolves the package's browser entry, which reads a plain Uint8Array —
-  // there is no Buffer in a browser and fontkit does not ship one. The cast is
-  // the single point where the published types and the shipped build disagree;
-  // it is checked by the fact that nothing downstream would work otherwise.
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  const base = fontkit.create(bytes as unknown as Buffer) as fontkit.Font;
+  const baked = decodeOutlines(await response.arrayBuffer());
 
-  const variations = new Map<string, fontkit.Font>();
-  function fontAt(axes: FontAxes): fontkit.Font {
-    const key = axisKey(axes);
-    let font = variations.get(key);
-    if (!font) {
-      // Read the quantised values back out of the key rather than off `axes`,
-      // so the outlines built here are exactly the ones the key promises.
-      const [wght, wdth] = key.split(":").map(Number) as [number, number];
-      font = base.getVariation({ wght, wdth });
-      variations.set(key, font);
+  /**
+   * Interpolate one entry to the given axes.
+   *
+   * Bilinear over the sample grid, which is exact rather than approximate:
+   * Archivo's design space is linear between masters and the bake samples the
+   * masters, so this reproduces `getVariation` to within its own integer
+   * rounding — measured at 2.33 font units, 0.0023 em.
+   */
+  function coordinatesAt(entry: BakedEntry, axes: FontAxes): Float32Array {
+    const rowWidth = entry.coordinateCount + 1;
+    const out = new Float32Array(rowWidth);
+
+    // A single-sample entry is one the bake found not point-compatible; it is
+    // used as-is at every axis value.
+    if (entry.sampleCount === 1) {
+      for (let i = 0; i < rowWidth; i += 1) out[i] = entry.rows[i]!;
+      return out;
     }
-    return font;
+
+    const [w0, wt] = bracket(baked.weights, axes.wght);
+    const [d0, dt] = bracket(baked.widths, axes.wdth);
+    const widthCount = baked.widths.length;
+    const corner = (wi: number, di: number): number =>
+      (wi * widthCount + di) * rowWidth;
+
+    const a = corner(w0, d0);
+    const b = corner(w0 + 1, d0);
+    const c = corner(w0, d0 + 1);
+    const d = corner(w0 + 1, d0 + 1);
+
+    // Samples past the first are stored as differences from sample 0, so every
+    // corner is reconstituted before it is blended. Sample 0 is the one row
+    // that is already absolute and must not have itself added to it.
+    const value = (row: number, i: number): number =>
+      row === 0 ? entry.rows[i]! : entry.rows[i]! + entry.rows[row + i]!;
+
+    for (let i = 0; i < rowWidth; i += 1) {
+      const va = value(a, i);
+      const vb = value(b, i);
+      const vc = value(c, i);
+      const vd = value(d, i);
+      const low = va + (vb - va) * wt;
+      const high = vc + (vd - vc) * wt;
+      out[i] = low + (high - low) * dt;
+    }
+    return out;
+  }
+
+  /**
+   * Split a word into baked entries, preferring the longest match.
+   *
+   * This is the whole of the shaping that survives dropping fontkit, and it is
+   * enough because the only substitutions Archivo applies by default are five
+   * `f`-ligatures — verified by enumerating every printable-ASCII pair and
+   * triple at bake time. Characters with no entry are skipped rather than
+   * substituted with a notdef box: a stray glyph the visitor cannot explain is
+   * worse than a missing one.
+   */
+  function entriesForWord(word: string): BakedEntry[] {
+    const found: BakedEntry[] = [];
+    let index = 0;
+    while (index < word.length) {
+      let matched: BakedEntry | undefined;
+      let length = Math.min(baked.longestSequence, word.length - index);
+      for (; length >= 1; length -= 1) {
+        matched = baked.entries.get(word.slice(index, index + length));
+        if (matched) break;
+      }
+      if (matched) {
+        found.push(matched);
+        index += length;
+      } else {
+        index += 1;
+      }
+    }
+    return found;
   }
 
   /**
@@ -627,15 +797,24 @@ export async function loadGlyphSource(url: string): Promise<GlyphSource> {
     axes: FontAxes,
     tolerance: number,
   ): { contours: Contour[]; width: number; height: number } {
-    const font = fontAt(axes);
-    const scale = 1 / font.unitsPerEm;
-    const run = font.layout(word);
+    const scale = 1 / baked.unitsPerEm;
+    const snapped = quantizeAxes(axes);
 
     const contours: Contour[] = [];
     let penX = 0;
-    for (const glyph of run.glyphs) {
-      contours.push(...contoursForGlyph(glyph, penX * scale, scale, tolerance));
-      penX += glyph.advanceWidth;
+    for (const entry of entriesForWord(word)) {
+      const row = coordinatesAt(entry, snapped);
+      const coordinates = row.subarray(1);
+      contours.push(
+        ...contoursForEntry(
+          entry.commands,
+          coordinates,
+          penX * scale,
+          scale,
+          tolerance,
+        ),
+      );
+      penX += row[0]!;
     }
     if (contours.length === 0) return { contours, width: 0, height: 0 };
 
@@ -669,8 +848,15 @@ export async function loadGlyphSource(url: string): Promise<GlyphSource> {
 
   return {
     advanceFor(word: string, axes: FontAxes): number {
-      const font = fontAt(axes);
-      return font.layout(word).advanceWidth / font.unitsPerEm;
+      const snapped = quantizeAxes(axes);
+      let total = 0;
+      for (const entry of entriesForWord(word)) {
+        // Only the advance is needed, and it is the first number in the row —
+        // but the row is interpolated whole, since the corners have to be
+        // reconstituted from their deltas either way.
+        total += coordinatesAt(entry, snapped)[0]!;
+      }
+      return total / baked.unitsPerEm;
     },
 
     outlineFor(

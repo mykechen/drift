@@ -24,11 +24,7 @@ import {
   type PhysicsRoom,
 } from "./engine/physics";
 import { createRoomRenderer } from "./engine/renderer";
-import {
-  axesForScores,
-  DISPLAY_FONT_URL,
-  NEUTRAL_AXES,
-} from "./design/typography";
+import { axesForScores, NEUTRAL_AXES } from "./design/typography";
 import { loadPropertyModel, type PropertyModel } from "./ml/properties";
 import { NEUTRAL_SCORES } from "./ml/fallback";
 import { debug } from "./util/debug";
@@ -85,7 +81,7 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
   // while the room is being built. Collected into one promise here rather than
   // awaited later so neither rejection is ever momentarily unhandled.
   const assets = Promise.all([
-    loadGlyphSource(DISPLAY_FONT_URL),
+    loadGlyphSource(),
     // The room must still accept typing if inference cannot start, so a failed
     // model degrades to neutral scores rather than taking the piece down.
     loadPropertyModel().catch((error: unknown): null => {
