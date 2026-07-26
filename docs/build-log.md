@@ -949,3 +949,71 @@ bounded-ness, re-freeze times) are throttle-immune and hold, but the p50 step
 cost wants a foreground-Chrome reading before this is called done against the
 16.7ms budget. Everything else — bounce ordering, fall ratio, rotation
 convergence, wake give-and-re-freeze, cursor placement — is verified.
+
+### Phase 2 — louder physics: big bounce, leaf drift, and words that crush
+
+With the room finally reading like the piece, the author pushed the physics to be
+more *expressive*: bounce much higher, let light words wander like a leaf, and —
+the big one — let a heavy word crush the light ones it lands on, to clear the
+board. Three features; the crush was the one that fought back and taught the most.
+
+**Bounce, much higher.** `MAX_RESTITUTION` went 0.72 → 0.92, but the real fix was
+noticing that the bounciest words are also lightish and therefore heavily damped
+— the same drag that makes a feather drift was smothering a ball's rebound. So
+bouncy words now shed most of that damping (`BOUNCY_DAMPING_FLOOR`), and `ball`'s
+hop went from 0.14 to **0.71 units**, roughly twice its own height, `rubber` to
+0.88. The tradeoff, recorded: a very bouncy word takes ~4.5s to stop, so a room
+full of them goes fully quiet slower (~15s vs ~9s). Non-bouncy rooms are
+unaffected, and freezing keys on linear stillness so a mid-bounce apex never
+false-freezes.
+
+**Leaf drift.** Very light words now get a sideways sway while descending, so
+`mist` and `feather` wander down instead of dropping straight. The first attempt
+was far too weak, and the reason is the same coupling as the bounce: a light word
+is heavily damped, and that damping eats a gentle sway. The push had to be
+*strong and slow* (`LEAF_FLUTTER_ACCEL` 19, 0.45 Hz) to swing wide before
+reversing rather than buzzing in place — after which `mist` wanders ~2 units,
+`feather` ~1.3, while `boulder` drops dead straight. It fades out as the word
+lands so settling is unaffected.
+
+**Crush: the premise paying off, and two bugs the tests caught.** The mechanic is
+that meaning with weight flattens meaning without — a heavy word destroys much
+lighter ones — chosen as *squash-then-fade*: the crushed word's body is removed
+at once (so a heavy word keeps sinking) while its mesh presses thin and fades over
+~0.3s. Physics removal is decoupled from the exit animation through a `drainCrushed`
+queue the renderer consumes.
+
+It did not work when the author tested it, and the reason was two stacked bugs
+that only a real drop surfaces:
+
+- *Wrong event.* Crush first rode the **contact-force** events that drive wake.
+  But a heavy word landing on a light one barely generates force — the light word
+  just gives way — so the event never fired. Measured directly: a boulder landing
+  0.18 units from a feather, well inside any radius, crushed nothing. Switched
+  crush to **collision** events, which fire on any contact regardless of force.
+- *Velocity read one step too late.* The gate "is the striker moving?" was checked
+  *after* `world.step()` — but that is the very step the solver stops the striker
+  in, so its post-step speed is already ~0 and the gate always failed. The room
+  had to **snapshot each body's speed before the step** and judge the impact on
+  that. This is the same class of bug as the resting-weight wake problem: what
+  matters is the state at the moment of contact, not after it resolves.
+
+**Punch-through lost to leaf drift; the area smash won.** Even firing correctly, a
+straight-down crush kept missing, because the lightest words — exactly the
+crushable ones — leaf-drift and are never sitting in a tidy column under the
+cursor. So crush became an **area smash**: a heavy, moving word flattens every
+much-lighter word within a mass-scaled radius (`mountain` ~2.6 units, `stone`
+~1.9). This is what "flatten everything out" actually meant, and it is robust to
+the scatter. Guards hold: a wide mass gap (`CRUSH_MASS_GAP` 0.5) so `boulder`
+never crushes `rock`, a striker-mass floor so only genuine heavyweights smash, the
+velocity gate so a *resting* heavy word crushes nothing, and a wake of the frozen
+neighbourhood so the pile collapses into the cleared space. Verified: every
+heavy→light pair crushes, heavy→heavy does not, and a 70-word mixed room still
+settles (~5.7s) even as half of it is being flattened during the fill.
+
+**Lesson for the writeup:** all three features are the same story — a light word's
+damping is load-bearing for *drift*, and it silently fights *every other* force
+you try to apply to a light word (its bounce, its sway). And the crush bugs are a
+reminder that impact mechanics must read the world at the instant of contact;
+both were invisible in code review and obvious the moment a word was actually
+dropped on another.

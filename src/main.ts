@@ -123,6 +123,9 @@ const loop = createFrameLoop({
   physicsHz: (): number => room.physicsHz(),
   step(fixedDeltaMs): void {
     room.step(fixedDeltaMs);
+    // Words crushed this step have already lost their bodies; hand them to the
+    // renderer to press flat and fade where they sat.
+    for (const id of room.drainCrushed()) renderer.crush(id);
   },
   render(): void {
     renderer.render(

@@ -7,6 +7,9 @@ import { debug } from "../util/debug";
 /** Retina is worth paying for; 3× displays are not. */
 const MAX_DEVICE_PIXEL_RATIO = 2;
 
+/** How long a crushed word takes to press flat and fade. */
+const CRUSH_FADE_MS = 320;
+
 /**
  * Flat fill of the word's own triangulation.
  *
@@ -21,12 +24,15 @@ const VERTEX_SHADER = /* glsl */ `
   uniform vec2 uTranslation;
   uniform float uRotation;
   uniform float uScale;
+  uniform vec2 uSquash;
   uniform vec2 uRoomHalfExtent;
 
   void main() {
     float s = sin(uRotation);
     float c = cos(uRotation);
-    vec2 scaled = position * uScale;
+    // uSquash flattens the glyph in its own frame — used by the crush animation
+    // to press a word thin (and spread it wide) before it fades.
+    vec2 scaled = position * uScale * uSquash;
     vec2 rotated = vec2(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
     vec2 world = rotated + uTranslation;
     gl_Position = vec4(world / uRoomHalfExtent, 0.0, 1.0);
@@ -63,6 +69,12 @@ export interface RoomRenderer {
    * one allocation per keystroke is nothing next to a frame.
    */
   readonly setDraft: (outline: WordOutline | null) => void;
+  /**
+   * Begin the crush exit for a word whose body physics has already removed: its
+   * mesh presses flat and fades in place, then is disposed. A no-op if the id has
+   * no live mesh.
+   */
+  readonly crush: (id: number) => void;
   /** Drop every mesh, committed and draft. */
   readonly detachAll: () => void;
   /** Re-reads the canvas's CSS size and resizes the drawing buffer to match. */
@@ -100,6 +112,8 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   const scene = new Transform();
   const ink = new Color(INK);
   const meshes = new Map<number, Mesh>();
+  /** Words being crushed out of existence: mesh + when the animation started. */
+  const crushing = new Map<number, { mesh: Mesh; startMs: number }>();
   /** The word being typed. One at a time, replaced wholesale on each keystroke. */
   let draft: Mesh | null = null;
 
@@ -145,6 +159,8 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           // Set per frame from the room's own scale, so a mesh's em units land
           // at the same size the colliders were built at.
           uScale: { value: 1 },
+          // [x, y] multiplier, 1 until the word is being crushed flat.
+          uSquash: { value: [1, 1] },
           uRoomHalfExtent: { value: [1, 1] },
           uInk: { value: [ink.r, ink.g, ink.b] },
           uAlpha: { value: 1 },
@@ -171,9 +187,21 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     draft.setParent(scene);
   }
 
+  function crush(id: number): void {
+    const mesh = meshes.get(id);
+    if (!mesh) return;
+    meshes.delete(id);
+    // The mesh keeps the transform the last frame gave it, so it presses flat
+    // exactly where the word was sitting. performance.now is fine here — this is
+    // wall-clock exit polish, not simulation.
+    crushing.set(id, { mesh, startMs: performance.now() });
+  }
+
   function detachAll(): void {
     for (const mesh of meshes.values()) mesh.setParent(null);
     meshes.clear();
+    for (const { mesh } of crushing.values()) mesh.setParent(null);
+    crushing.clear();
     setDraft(null);
   }
 
@@ -190,6 +218,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     aspect: (): number => canvas.clientWidth / Math.max(canvas.clientHeight, 1),
     attach,
     setDraft,
+    crush,
     detachAll,
     resize,
     render(
@@ -214,6 +243,31 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           roomHalfHeight,
         ];
       }
+      if (crushing.size > 0) {
+        const now = performance.now();
+        for (const [id, entry] of crushing) {
+          const t = (now - entry.startMs) / CRUSH_FADE_MS;
+          if (t >= 1) {
+            entry.mesh.setParent(null);
+            crushing.delete(id);
+            continue;
+          }
+          const uniforms = entry.mesh.program.uniforms;
+          // Press thin and spread slightly wide, fading as it flattens. Scale and
+          // room extent are refreshed in case the room resized mid-crush.
+          (uniforms["uSquash"] as { value: number[] }).value = [
+            1 + 0.35 * t,
+            Math.max(0.04, 1 - t),
+          ];
+          (uniforms["uAlpha"] as { value: number }).value = 1 - t;
+          (uniforms["uScale"] as { value: number }).value = wordScale;
+          (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
+            roomHalfWidth,
+            roomHalfHeight,
+          ];
+        }
+      }
+
       if (draft) {
         const uniforms = draft.program.uniforms;
         // The draft is centred on the cursor — which follows the mouse in x —

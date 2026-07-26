@@ -93,6 +93,27 @@ const MAX_LINEAR_DAMPING = 5.4;
 const DRAG_RESIDUAL_INFLUENCE = 0.45;
 
 /**
+ * Leaf drift: very light words flutter sideways as they fall instead of dropping
+ * straight, so `feather` and `mist` wander down like a leaf while `boulder` drops
+ * like a stone. It is a horizontal sway force applied only while a light word is
+ * *descending*; once it lands and slows, the sway stops so it can settle and
+ * freeze. Strength scales with how far below `LEAF_MASS_MAX` the word's mass is.
+ */
+const LEAF_MASS_MAX = -0.15;
+// Strong and slow: a light word is heavily damped (that is what makes it drift
+// *down* slowly), and the same damping smothers a gentle sway — so the sideways
+// push has to be large, and low-frequency so the word swings wide one way before
+// reversing rather than buzzing in place.
+const LEAF_FLUTTER_ACCEL = 19;
+const LEAF_FLUTTER_HZ = 0.45;
+const LEAF_MIN_FALL_SPEED = 0.2;
+
+/** How leaf-like a word is, in [0, 1] — 0 for anything at or above LEAF_MASS_MAX. */
+function leafFactor(scores: PropertyScores): number {
+  return Math.max(0, Math.min(1, (LEAF_MASS_MAX - scores.mass) / 0.85));
+}
+
+/**
  * Rotation: words tumble freely, then right themselves as they settle.
  *
  * The first fix for the settling-flat problem locked rotation outright and
@@ -144,10 +165,21 @@ const ORIENT_TORQUE_GAIN = 0.11;
  * `0`, so `rock` truly hard-stops, while positive scores ramp up to
  * `MAX_RESTITUTION`. That is the crisp `ball`-bounces / `rock`-thuds split.
  *
- * `MAX_RESTITUTION` is set so the bounciest words hop a few decreasing times and
- * then rest — bouncy, but not a superball that never settles and never freezes.
+ * `MAX_RESTITUTION` is high on purpose — the bounciest words should really leap,
+ * not politely hop. It still stays below 1 so each bounce loses energy and the
+ * word eventually comes to rest and freezes; a true 1.0 superball never settles
+ * and a full room of them never goes quiet.
  */
-const MAX_RESTITUTION = 0.72;
+const MAX_RESTITUTION = 0.92;
+
+/**
+ * Bouncy words shed less of their fall damping, so a high rebound is not eaten by
+ * the same drag that makes light words drift. At full bounciness a word keeps
+ * this fraction of the damping its mass/drag imply; at zero bounciness, all of
+ * it. Without this a light, bouncy word (`ball`) barely leaves the floor because
+ * its lightness makes it draggy — the very thing that should let it soar.
+ */
+const BOUNCY_DAMPING_FLOOR = 0.35;
 
 /**
  * Wake-on-impact: a frozen word is knocked back to dynamic only when struck by
@@ -179,6 +211,31 @@ const WAKE_IMPACT_SPEED = 2;
  * delay.
  */
 const WAKE_RADIUS = 1.3;
+
+/**
+ * Crush: a heavy word landing flattens the much lighter words *around* where it
+ * lands — meaning with weight obliterating meaning without. The premise of the
+ * piece paying off, and a way to clear the board by dropping something heavy.
+ *
+ * It is an *area* smash, not a direct hit, and that is deliberate: the lightest
+ * words leaf-drift as they fall, so they are never sitting in a tidy column
+ * under the cursor. A radius lets a dropped `mountain` flatten the feathers
+ * scattered near it, which is what "flatten everything out" means and what a
+ * punch-straight-down crush conspicuously failed to do.
+ *
+ * A word smashes only when it is genuinely heavy (`CRUSH_MIN_STRIKER_MASS`) and
+ * moving (the same velocity gate as waking, so a *resting* heavy word crushes
+ * nothing), and it only takes words lighter than it by a wide margin
+ * (`CRUSH_MASS_GAP`) — `mountain` buries `feather`, `stone` merely nudges
+ * `pebble`. The radius grows with the striker's weight. Crushed words also wake
+ * the frozen neighbourhood, so the pile collapses into the cleared space rather
+ * than leaving sediment floating over a hole. Measured on the mass axis
+ * (semantic weight), because the mechanic is about what words *mean*.
+ */
+const CRUSH_MIN_STRIKER_MASS = 0.25;
+const CRUSH_MASS_GAP = 0.5;
+const CRUSH_RADIUS_BASE = 1.1;
+const CRUSH_RADIUS_PER_MASS = 1.6;
 
 /** Shortest signed angle from `angle` to upright (0), in (−π, π]. */
 function wrapToPi(angle: number): number {
@@ -277,6 +334,11 @@ export interface PhysicsRoom {
   ): WordBody | null;
   /** Advance by one fixed step. */
   step(fixedDeltaMs: number): void;
+  /**
+   * Ids of words crushed since the last call. The caller owns their exit
+   * animation — physics has already removed the bodies. Drains the queue.
+   */
+  drainCrushed(): number[];
   /** Remove every body. */
   clear(): void;
 }
@@ -325,11 +387,22 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
   /** Collider handle → the word it belongs to, for resolving impact events. */
   const bodyByCollider = new Map<number, WordBody>();
   /**
+   * Each body's speed at the *start* of the current step, keyed by id. Impact
+   * resolution must judge how fast a striker was travelling when it hit, not
+   * after — the same step that fires the contact event is the one the solver
+   * stops the striker in, so its post-step speed is already near zero.
+   */
+  const speedBeforeStep = new Map<number, number>();
+  /**
    * Drained after every step to find hard contacts. Autodrain is off; contacts
    * are read explicitly in `step`. Only colliders whose contact-force threshold
    * is exceeded generate events, so this stays cheap in a settled room.
    */
   const eventQueue = new RAPIER.EventQueue(false);
+  /** Accumulated sim time, for the leaf-drift sway phase. */
+  let elapsedMs = 0;
+  /** Ids of words crushed this step, handed to the renderer to animate out. */
+  let crushedIds: number[] = [];
 
   let roomWidth = ROOM_HEIGHT_UNITS * aspect;
   let walls: RAPIER.RigidBody | null = null;
@@ -375,12 +448,9 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
       : PHYSICS_HZ_DENSE;
   }
 
-  /** Linear speed of a word's body, or 0 if it has none. */
-  function speedOf(wordBody: WordBody): number {
-    const body = handles.get(wordBody.id);
-    if (!body) return 0;
-    const v = body.linvel();
-    return Math.hypot(v.x, v.y);
+  /** How fast a word was travelling at the start of this step — its impact speed. */
+  function impactSpeed(wordBody: WordBody): number {
+    return speedBeforeStep.get(wordBody.id) ?? 0;
   }
 
   /** Turn one frozen word back to dynamic and restart its settle timer. */
@@ -393,27 +463,62 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
     stillForMs.set(wordBody.id, 0);
   }
 
-  /**
-   * If `target` is frozen and `striker` is a word moving faster than
-   * `WAKE_IMPACT_SPEED`, wake `target` and the frozen cluster within
-   * `WAKE_RADIUS` of it so the pile visibly gives where it was hit, then let them
-   * re-settle and re-freeze. A no-op when `target` is not frozen or the striker
-   * is a wall / a slow resting neighbour — which is what keeps dead weight from
-   * perpetually re-waking the word beneath it.
-   */
-  function considerWake(
-    target: WordBody | undefined,
-    striker: WordBody | undefined,
-  ): void {
-    if (!target || !target.frozen || !striker) return;
-    if (speedOf(striker) <= WAKE_IMPACT_SPEED) return;
-    const cx = target.x;
-    const cy = target.y;
+  /** Wake every frozen word within `WAKE_RADIUS` of a point. */
+  function wakeAround(cx: number, cy: number): void {
     for (const wordBody of bodies) {
       if (!wordBody.frozen) continue;
       if (Math.hypot(wordBody.x - cx, wordBody.y - cy) <= WAKE_RADIUS)
         wakeBody(wordBody);
     }
+  }
+
+  /** Drop a word from the world entirely — its body, colliders, and bookkeeping. */
+  function removeWord(wordBody: WordBody): void {
+    const body = handles.get(wordBody.id);
+    if (body) world.removeRigidBody(body);
+    handles.delete(wordBody.id);
+    stillForMs.delete(wordBody.id);
+    for (const [handle, owner] of bodyByCollider)
+      if (owner === wordBody) bodyByCollider.delete(handle);
+    const index = bodies.indexOf(wordBody);
+    if (index >= 0) bodies.splice(index, 1);
+  }
+
+  /**
+   * If `striker` is a heavy word moving fast enough to smash, mark every much
+   * lighter word within its (mass-scaled) crush radius for destruction. Called
+   * per collision so a heavy word smashes wherever it first lands and again as it
+   * sinks. A no-op for walls, light words, and resting words.
+   */
+  function considerAreaCrush(
+    striker: WordBody | undefined,
+    toCrush: Set<WordBody>,
+  ): void {
+    if (!striker || striker.scores.mass <= CRUSH_MIN_STRIKER_MASS) return;
+    if (impactSpeed(striker) <= WAKE_IMPACT_SPEED) return;
+    const radius =
+      CRUSH_RADIUS_BASE + striker.scores.mass * CRUSH_RADIUS_PER_MASS;
+    for (const target of bodies) {
+      if (target === striker || toCrush.has(target)) continue;
+      if (striker.scores.mass - target.scores.mass <= CRUSH_MASS_GAP) continue;
+      if (Math.hypot(target.x - striker.x, target.y - striker.y) <= radius)
+        toCrush.add(target);
+    }
+  }
+
+  /**
+   * From a forceful contact, wake a frozen `target` and its cluster if the
+   * striker is moving — the pile gives where it is hit. A no-op on an unfrozen
+   * target or a slow/resting striker, which is what keeps dead weight from
+   * perpetually re-waking the word beneath it.
+   */
+  function resolveWake(
+    target: WordBody | undefined,
+    striker: WordBody | undefined,
+  ): void {
+    if (!target || !target.frozen || !striker) return;
+    if (impactSpeed(striker) <= WAKE_IMPACT_SPEED) return;
+    wakeAround(target.x, target.y);
   }
 
   return {
@@ -445,13 +550,16 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
         DENSITY_AT_LIGHTEST,
         DENSITY_AT_HEAVIEST,
       );
-      const damping =
-        MIN_LINEAR_DAMPING +
-        fallResistance(scores) * (MAX_LINEAR_DAMPING - MIN_LINEAR_DAMPING);
       // Positives-only: anything the model rates clay-to-neutral (≤ 0) hard-stops
       // at 0; only genuinely bouncy words rebound. See MAX_RESTITUTION.
-      const restitution =
-        MAX_RESTITUTION * Math.max(0, Math.min(1, scores.restitution));
+      const bounciness = Math.max(0, Math.min(1, scores.restitution));
+      const restitution = MAX_RESTITUTION * bounciness;
+      // Bouncy words keep less of their fall damping so the rebound can actually
+      // soar — see BOUNCY_DAMPING_FLOOR.
+      const damping =
+        (MIN_LINEAR_DAMPING +
+          fallResistance(scores) * (MAX_LINEAR_DAMPING - MIN_LINEAR_DAMPING)) *
+        (1 - bounciness * (1 - BOUNCY_DAMPING_FLOOR));
 
       const id = nextId;
       nextId += 1;
@@ -489,8 +597,13 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
         // against the dead floor instead of losing half of it.
         collider.setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Max);
         collider.setFriction(FRICTION);
-        // Only hard contacts fire, so a settled pile generates no events.
-        collider.setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS);
+        // Collision events (any contact, regardless of force) drive crush, since
+        // a heavy word landing on a light one barely generates force. Contact-
+        // force events, gated high, drive wake so settling jitter is ignored.
+        collider.setActiveEvents(
+          RAPIER.ActiveEvents.COLLISION_EVENTS |
+            RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS,
+        );
         collider.setContactForceEventThreshold(WAKE_IMPACT_FORCE);
         try {
           colliderHandles.push(world.createCollider(collider, body).handle);
@@ -540,18 +653,45 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
 
     step(fixedDeltaMs: number): void {
       world.timestep = fixedDeltaMs / 1000;
+      elapsedMs += fixedDeltaMs;
+
+      // Snapshot how fast each word is moving *before* the step resolves — the
+      // contact that fires an impact event is the same one that stops the
+      // striker, so its post-step speed no longer reflects the blow.
+      speedBeforeStep.clear();
+      for (const wordBody of bodies) {
+        const body = handles.get(wordBody.id);
+        if (body) {
+          const v = body.linvel();
+          speedBeforeStep.set(wordBody.id, Math.hypot(v.x, v.y));
+        }
+      }
+
       world.step(eventQueue);
 
-      // A forceful contact (above the colliders' event threshold) can wake a
-      // frozen word — but only if the word that hit it is actually moving, which
-      // considerWake checks. Either collider may be the frozen one, so both
-      // orderings are tried.
+      // Crush is decided from collision events — any contact, since a heavy word
+      // landing on a light one barely generates force — and wake from the
+      // force-gated events so settling jitter never wakes the pile. Either
+      // collider may be the striker, so both orderings are tried. Crushed words
+      // are collected and removed after draining, since removing a body
+      // mid-iteration is unsafe.
+      const toCrush = new Set<WordBody>();
+      eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+        if (!started) return;
+        considerAreaCrush(bodyByCollider.get(handle1), toCrush);
+        considerAreaCrush(bodyByCollider.get(handle2), toCrush);
+      });
       eventQueue.drainContactForceEvents((event) => {
         const a = bodyByCollider.get(event.collider1());
         const b = bodyByCollider.get(event.collider2());
-        considerWake(a, b);
-        considerWake(b, a);
+        resolveWake(a, b);
+        resolveWake(b, a);
       });
+      for (const wordBody of toCrush) {
+        wakeAround(wordBody.x, wordBody.y);
+        removeWord(wordBody);
+        crushedIds.push(wordBody.id);
+      }
 
       for (const wordBody of bodies) {
         const body = handles.get(wordBody.id);
@@ -567,6 +707,24 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
 
         const velocity = body.linvel();
         const linSpeed = Math.hypot(velocity.x, velocity.y);
+
+        // Leaf drift: a light word descending gets a sideways sway so it wanders
+        // down instead of dropping straight. Gated on falling, so it stops once
+        // the word lands and can then settle and freeze. Phased by id so no two
+        // leaves sway in unison.
+        const leaf = leafFactor(wordBody.scores);
+        if (leaf > 0 && velocity.y < -LEAF_MIN_FALL_SPEED) {
+          const sway =
+            Math.sin(
+              (elapsedMs / 1000) * LEAF_FLUTTER_HZ * 2 * Math.PI + wordBody.id,
+            ) *
+            leaf *
+            LEAF_FLUTTER_ACCEL;
+          body.applyImpulse(
+            { x: sway * body.mass() * (fixedDeltaMs / 1000), y: 0 },
+            false,
+          );
+        }
 
         // Right the word once it has slowed — a word still in flight keeps
         // tumbling. Inside the deadband the torque is zero, so a settled word
@@ -606,12 +764,20 @@ export async function createPhysicsRoom(aspect: number): Promise<PhysicsRoom> {
       }
     },
 
+    drainCrushed(): number[] {
+      if (crushedIds.length === 0) return [];
+      const drained = crushedIds;
+      crushedIds = [];
+      return drained;
+    },
+
     clear(): void {
       for (const body of handles.values()) world.removeRigidBody(body);
       handles.clear();
       bodyByCollider.clear();
       stillForMs.clear();
       bodies.length = 0;
+      crushedIds = [];
     },
   };
 }

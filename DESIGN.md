@@ -256,6 +256,32 @@ Ship exactly these six:
 
 Do not add a seventh. If a great one occurs to you, replace one of these — do not extend.
 
+### Physics expression (added Phase 2)
+
+These are **not** special behaviors — there is no per-word script and no curated
+list. They are emergent consequences of the mass/restitution model, so they do
+not count against the cap of six above. Documented here because they materially
+change how the room behaves.
+
+- **Bounce is loud.** A word's `restitution` really launches it — `ball` and
+  `rubber` leap and hop several times; `rock` and `boulder` thud dead. Bouncy
+  words also shed most of their fall-damping so a light bouncy word can actually
+  soar instead of being smothered by its own drift-drag.
+- **Leaf drift.** Very light words (`feather`, `mist`, `cloud`) flutter sideways
+  as they fall, wandering down like a leaf, then settle. Heavy words drop
+  straight. Because light words no longer stack in tidy columns, this also shapes
+  where they come to rest.
+- **Crush.** A heavy word landing flattens the much-lighter words *within a
+  radius* of where it lands — meaning with weight obliterating meaning without —
+  and they squash thin and fade (~0.3s). The radius grows with the striker's
+  weight (`mountain` clears a wide crater, `stone` only its neighbours). Only
+  genuine heavyweights crush, only words lighter by a wide margin are crushed
+  (`boulder` never crushes `rock`), and only a *landing* word crushes — a resting
+  one does not. This is a second clearing path alongside the density fade: the
+  fade forgets the *oldest*, the crush clears *where you aim weight*. It is
+  deletion rather than forgetting, deliberately — the one violent gesture in a
+  quiet room, earned because it is the mass premise made physical.
+
 ---
 
 ## Feel targets
