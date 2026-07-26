@@ -1183,3 +1183,150 @@ the cursor is drawn into the canvas. This is flagged rather than fixed, because
 inventing DOM chrome now would be adding UI to a piece whose specification says
 there is none. **Re-run this measurement when the footer exists**, and treat
 Phase 8's Lighthouse item as unverified until then rather than as confirmation.
+
+### Dropping fontkit: bake the outlines, keep the pipeline
+
+fontkit existed at runtime to do one thing — turn a character and a pair of axis
+values into an outline — and that is a pure function of a font that does not
+change between builds. `scripts/build-glyph-outlines.ts` now evaluates it once,
+at build time, across a grid of axis samples;
+`src/engine/glyphs.ts` interpolates between them. That takes both fontkit
+(132.7 KB) *and* `Archivo.ttf` (191.7 KB) off the wire, since nothing at runtime
+parses the font any more, and `typography.js` collapses from 132.7 KB to 5.1 KB.
+
+**Bake the control points, not the flattened polygons.** Flattening at build
+time was the obvious move and it is wrong. Curve subdivision and the RDP
+simplification after it are both driven by a tolerance, so baking past them
+freezes that tolerance into the data — and `/debug/glyphs`, whose whole job is
+sweeping it to judge the collider budget, stops being able to sweep anything.
+Baking control points instead means the runtime loses fontkit's *parsing* and
+keeps every line of its own geometry pipeline. It is also smaller: an `o` is 30
+commands where its flattened ring is several times that. Phase 3's SDF gets true
+curves to read from, which is the other half of why this had to precede it.
+
+**Sampling the masters is the whole game, and one sample point was worth 9×.**
+The first grids measured badly — 20 font units of error, where the piece's
+flattening tolerance is 31 — and adding weight samples did not help. The
+residual was entirely in width, because the grid was sampling `wdth` at 85/105/125
+and *missing the master at 100*. Archivo's design space turns out to be linear
+between masters, so a grid that lands on them reproduces the font and a grid
+that misses one does not:
+
+| Grid | all ASCII | a-z | advance | bytes |
+|---|---|---|---|---|
+| 2×3 `[85,125]` | 63.03 | 54.76 | 64.97 | 57,918 |
+| 3×3 `[85,100,125]` | 16.23 | 14.60 | 14.86 | 126,202 |
+| 6×3 `[85,105,125]` | 19.97 | 14.56 | 19.39 | 249,112 |
+| **6×3 `[85,100,125]`** | **2.33** | **2.13** | **0.00** | 249,112 |
+| 6×4 `[85,100,112,125]` | 2.33 | 2.13 | 0.00 | 331,050 |
+| 11×4 | 2.32 | 2.23 | 0.00 | 604,180 |
+
+Sampling harder past 6×3 buys nothing, which says the remaining 2.33 units is
+`getVariation`'s own integer rounding rather than interpolation error — the
+arithmetic is exact and that is the floor. Advances come out exact.
+
+**Two things the work turned up that would have shipped silently.**
+
+*The point-compatibility check earned its keep on the first run.* `$` is not
+point-compatible across the grid — its construction gains eight coordinates at
+the heavy end — and interpolating index-by-index between outlines whose point
+counts disagree does not throw, it produces garbage geometry. 94 of 95 glyphs
+hold; `$` is baked at one setting and marked static, which for a character that
+can never appear in a scored word is invisible. The bake names any such glyph in
+its output so the exception stays a decision.
+
+*`layout()` was applying ligatures, and dropping it would have turned them off.*
+Archivo substitutes `ff`, `fi`, `fl`, `ffi`, `ffl` by default, so baking one
+glyph per character would have quietly changed how `fire`, `flint` and `office`
+are drawn **and shaped** — a ligature is one compound body, not two. Enumerating
+every printable-ASCII pair and triple found exactly those five, so they are baked
+as entries of their own and matched greedily; no GSUB implementation needed.
+
+**Verified against the path it replaced**, over 14 words × 6 axis settings:
+zero contour-count mismatches, zero point-count differences — the flattening
+makes identical decisions — and a worst bounding-box difference of **0.0022 em**
+against a flattening tolerance of 1/32 em. `/debug/glyphs` still reports the
+counters and `i`'s two outer contours correctly, and its tolerance sweep still
+sweeps.
+
+### Rapier off `-compat`: 121 KB, and an engine the browser can cache
+
+The `-compat` build carries its 1.15 MB WebAssembly base64-inlined in the
+JavaScript. That is worse than it sounds, because base64 inside JS compresses
+far worse than the binary does: **443 KB brotli against 319 KB**. Inlining cost
+121 KB *and* denied the browser any chance to cache the engine as its own file.
+`boot.js` falls from 475.6 KB to 35.9 KB.
+
+Vite 8 handles the wasm ESM import natively — no plugin was needed, which the
+roadmap had flagged as an unknown. What *was* needed is telling the dependency
+pre-bundle to leave it alone. Rapier reaches its WebAssembly through
+`import * as wasm from "./…_bg.wasm"` and the wasm-bindgen glue beside it expects
+to be handed those exports via `__wbg_set_wasm`; the pre-bundle flattens the two
+into one file and the hand-off does not survive. The module loads fine and then
+the first `createRigidBody` dies reading `.memory` of undefined. **This breaks
+only in `pnpm dev`** — the production build was correct throughout, which is
+exactly the shape of bug that reaches a deploy. `optimizeDeps.exclude` now names
+it, beside `onnxruntime-web`, which is excluded for a related but distinct
+reason.
+
+`RAPIER.init()` goes away with the compat build, so `createPhysicsRoom` is
+synchronous — the lint's `require-await` caught the alternative, correctly.
+
+### Where it landed
+
+| Asset | Before | After |
+|---|---|---|
+| `ort-wasm-simd-threaded.wasm` | 2149.9 KB | 2149.9 KB |
+| `properties.v1.onnx` | 483.3 KB | 483.3 KB |
+| `room.js` / `boot.js` | 475.4 KB | 35.9 KB |
+| `rapier_wasm2d_bg.wasm` | — (inlined) | 318.9 KB |
+| `Archivo.ttf` | 191.7 KB | — (build input only) |
+| `typography.js` | 132.6 KB | 5.1 KB |
+| `glyph-outlines.bin` | — | 106.5 KB |
+| `properties.v1.vocab.txt` | 32.0 KB | 32.0 KB |
+| `properties.js` | 21.1 KB | 20.8 KB |
+| `mobile-fallback.webp` | — | 19.7 KB\* |
+| everything else | 1.4 KB | 1.9 KB |
+| **cold desktop** | **3487.3 KB** | **3174.1 KB** |
+| **cold mobile** | **3487.3 KB** | **21.6 KB** |
+
+\* attributed to desktop by the static walk but never actually requested there —
+see the note in `measure-payload.ts`. The true desktop figure is ~3154 KB.
+
+What each change bought:
+
+| Change | Desktop | Mobile |
+|---|---|---|
+| Mobile gating | — | −3465.7 KB |
+| Non-blocking first paint | 0 KB (it moves *when*, not *how much*) | — |
+| Bake glyph outlines, drop fontkit | −212.8 KB | — |
+| Rapier off `-compat` | −120.7 KB | — |
+
+**Cold mobile is a 99.4% cut. Cold desktop is 9%,** and the honest reading of
+that second number is the one the baseline predicted: the ONNX runtime and the
+model are 83% of what remains, they are not negotiable — Phase 1c measured the
+alternatives and the smaller builds are the slower ones — and no amount of
+further shaving touches them. The desktop budget is the ML floor plus about
+520 KB, and 520 KB is a defensible number for a piece that ships a physics
+engine and a typeface.
+
+**Lighthouse**, built preview, real headful Chrome:
+
+| Route | Performance | Accessibility | Best practices | SEO |
+|---|---|---|---|---|
+| `/` at phone viewport | **100** | **100** | 96 | **100** |
+| `/` at desktop viewport | *no score — NO_FCP* | — | — | — |
+
+Accessibility reached 100 by giving the document a `<main>` landmark and the
+canvas an `aria-label`; the centring moved from `<body>` to `<main>` to do it,
+rather than using `display: contents`, which has a history of dropping elements
+out of the accessibility tree — the one place a landmark needs to be. The single
+remaining best-practices deduction is the `favicon.ico` 404, which is Phase 8's
+item and resolves itself when the favicon lands.
+
+Nothing regressed. Inference p50 0.10ms / p95 0.80ms over 18 cache-missing
+words, against a 5ms budget. Feel test 1 holds at 896ms versus 2425ms, the same
+2.7× gap. `ball` still bounces higher than `boulder` thuds; `mist` leaf-drifts
+0.99 units where `boulder` drifts 0.01; a `mountain` crushes a bed of six light
+words and a `boulder` crushes none of six heavy ones; a struck pile wakes,
+shifts and re-freezes 7/7. Both debug pages work.

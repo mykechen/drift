@@ -31,8 +31,8 @@ If a proposed feature does not directly serve *"typed word becomes a physical bo
 - **Rendering:** WebGL via [OGL](https://github.com/oframe/ogl) (preferred) or [regl](https://github.com/regl-project/regl). NOT Three.js.
   - *Future note:* WebGPU is viable in 2026 (Chrome, Edge, Safari; Firefox still lagging). If v2 introduces compute-shader work — for example, moving the semantic-gravity force field onto the GPU — migrating to WebGPU via `webgpu-utils` becomes worthwhile. For v1, WebGL is correct: broader support, less setup, and no compute shaders in scope.
 - **Display typeface:** [Archivo](https://github.com/Omnibus-Type/Archivo) variable (`wght 100–900`, `wdth 62–125`), SIL OFL, in `/public/fonts/Archivo.ttf`. Replaced Söhne Breit in Phase 2 because Klim ships Söhne static-only and the variable-axis wiring is load-bearing — see the note in `DESIGN.md`. Archivo is TrueType, so outlines are quadratic curves only; there are no cubics to flatten.
-- **Glyph rendering:** SDF-rendered. Use [fontkit](https://github.com/foliojs/fontkit) for outlines — verified working in the browser under Vite via its `browser-module.mjs` ESM build. `font.getVariation({ wght, wdth })` returns interpolated outlines at arbitrary axis values, and outlines across axis settings are point-compatible. SDF atlas generated at build time or first-load and cached. Note the browser build is ~545KB raw; if that becomes a problem, outlines can be baked at build time at a few axis samples and interpolated at runtime, since point-compatibility guarantees it.
-- **Physics:** [Rapier2D](https://rapier.rs/) via WASM. NOT Matter.js.
+- **Glyph rendering:** SDF-rendered. [fontkit](https://github.com/foliojs/fontkit) reads the outlines, but **at build time only — it is a devDependency and never ships.** Phase 2.5 took the "if that becomes a problem" escape hatch this entry used to describe: `scripts/build-glyph-outlines.ts` samples `font.getVariation({ wght, wdth })` over a 6×3 axis grid and writes `src/engine/glyph-outlines.bin`; the runtime interpolates between samples. Point-compatibility is what makes that safe, and the script *checks* it per glyph rather than trusting it. Two things to know before touching this: what is baked is the **raw quadratic control points**, not flattened polygons, so the flattening tolerance stays a runtime knob and the SDF has true curves to read; and the grid must **land on the font's masters** — `wdth 100` is one, and a grid that misses it measures nine times the interpolation error. Ligatures (`ff fi fl ffi ffl`) are baked as their own entries because dropping fontkit means dropping `layout()`, which is what applied them.
+- **Physics:** [Rapier2D](https://rapier.rs/) via WASM. NOT Matter.js. Use `@dimforge/rapier2d`, **not** `-compat`: the compat build base64-inlines its WebAssembly into the JS, which costs 121KB brotli over the raw binary and prevents the engine being cached as its own file. It must be listed in `optimizeDeps.exclude` — the dependency pre-bundle breaks its `__wbg_set_wasm` hand-off, and it fails *only in dev*, at the first `createRigidBody`.
 - **Convex decomposition:** required for glyph collision shapes. Use [earcut](https://github.com/mapbox/earcut) to tessellate, then merge triangles into convex hulls.
   - This originally specified `decomp.js`, described as "a modern rewrite of poly-decomp." **That package does not exist** — the linked repository 404s and there is no such npm package. The real alternative, `poly-decomp`, does not handle holes, which is precisely the stated problem. earcut handles holes natively, is ~2KB, and is battle-tested in Mapbox GL.
   - **Contour count does not tell you about holes.** `i` has two contours that are both outer (stem and tittle); `o` has two where the second is a hole; `g` has three. Classify by signed area to get winding, then assign each hole to the outer contour containing it. Getting this wrong makes `i` a solid blob or `o` a solid disc, and both look fine until something has to land in the counter.
@@ -63,13 +63,15 @@ Do not introduce dependencies not on this list without asking. Every additional 
 ├── tsconfig.json
 ├── package.json
 ├── /src
-│   ├── main.ts               (entry, sets up canvas, loop, input)
+│   ├── main.ts               (entry; detects mobile, then dynamic-imports boot.ts)
+│   ├── boot.ts               (the piece: canvas, loop, input — desktop only)
 │   ├── /engine
 │   │   ├── physics.ts        (Rapier world, body management)
 │   │   ├── renderer.ts       (OGL/regl scene, SDF glyph rendering)
 │   │   ├── input.ts          (keyboard state, word buffer, commit logic)
 │   │   ├── loop.ts           (frame loop, physics substepping, sleep mgmt)
-│   │   └── glyphs.ts         (fontkit → outlines → convex hulls → SDF)
+│   │   ├── glyphs.ts         (baked outlines → convex hulls → SDF)
+│   │   └── glyph-outlines.bin (baked by /scripts, imported with ?url)
 │   ├── /ml
 │   │   ├── properties.ts     (word → 6 property scores, ONNX inference)
 │   │   ├── gravity.ts        (semantic gravity force field)
@@ -81,6 +83,7 @@ Do not introduce dependencies not on this list without asking. Every additional 
 │   │   └── sound.ts          (audio events, ambient bed)
 │   ├── /world
 │   │   ├── room.ts           (composition, camera, background, density mgmt)
+│   │   ├── fallback.ts       (mobile detection + the fallback screen)
 │   │   └── behaviors.ts      (special word behaviors — color words, onomatopoeia, etc.)
 │   └── /util
 ├── /model                    (Python, PyTorch, dataset generation, training)
@@ -90,12 +93,14 @@ Do not introduce dependencies not on this list without asking. Every additional 
 │   ├── export_onnx.py
 │   └── /data                 (word lists, labels, embeddings — gitignored if large)
 ├── /public
-│   ├── /fonts                (Archivo variable, SIL OFL — checked in)
+│   ├── /fonts                (Archivo variable, SIL OFL — build input, not served to visitors)
+│   ├── mobile-fallback.webp  (still of a composition, for the mobile screen)
 │   ├── og.png                (1200×630 OG image, static)
 │   └── favicon.svg
 └── /scripts
-    ├── build-sdf-atlas.ts    (build-time SDF atlas generation)
-    └── prepare-fonts.ts
+    ├── build-glyph-outlines.ts (bakes the axis grid — `pnpm bake:glyphs`)
+    ├── measure-payload.ts    (per-asset brotli cost of a cold visit — `pnpm measure`)
+    └── build-sdf-atlas.ts    (build-time SDF atlas generation — Phase 3)
 ```
 
 ---
@@ -117,7 +122,7 @@ Do not introduce dependencies not on this list without asking. Every additional 
 
 The single most important architectural decision:
 
-- **Words are their own glyph outlines as physics bodies.** Not textured quads. Not sprites. Use fontkit to extract the actual outlines of the current word at its predicted axis values, decompose into convex hulls, feed those to Rapier as compound colliders. Render the same outlines via SDF for crispness at any scale.
+- **Words are their own glyph outlines as physics bodies.** Not textured quads. Not sprites. Take the actual outlines of the current word at its predicted axis values — interpolated from the baked grid, no font parsing at runtime — decompose into convex hulls, feed those to Rapier as compound colliders. Render the same outlines via SDF for crispness at any scale.
 - **Variable font axes are driven by physics state.** Weight and optical size are wired to the ML property scores. A word predicted heavy renders heavier. This is the "the word IS the body" move. Do not skip it.
 - **Physics runs at a target of 120Hz below 100 bodies, 60Hz between 100 and 200.** Density-aware. Automatic. Invisible to the user.
 - **Bodies sleep aggressively.** Rapier's sleep thresholds tuned so a settled word stops simulating within ~500ms of coming to rest.

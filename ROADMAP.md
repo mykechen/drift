@@ -15,7 +15,7 @@ Phases are annotated as they complete, including where the plan turned out to be
 | 0 — Environment and skeleton | **done** |
 | 1 — The property model | **done**, all exit criteria met |
 | 2 — Words as physics bodies | **feel test 1 passes; rotation resolved.** SDF not started |
-| 2.5 — Payload | **not started** (added after Phase 2 — see below) |
+| 2.5 — Payload | **done**, all exit criteria met |
 | 3–9 | not started |
 
 **Actual build order, revised.** Two changes from the original sequence:
@@ -111,19 +111,24 @@ Now that words have properties, make them things.
 
 ---
 
-## Phase 2.5 — Payload (~2–3 days) — **new, not started**
+## Phase 2.5 — Payload (~2–3 days) — **done**
 
-Not in the original plan. Added because Phase 8 asks for Lighthouse 100 on performance and the piece currently ships roughly 3MB compressed for a single canvas. Every fix here is structural, which is exactly why it cannot wait for Phase 8.
+Not in the original plan. Added because Phase 8 asks for Lighthouse 100 on performance and the piece shipped roughly 3.5MB compressed for a single canvas. Every fix here is structural, which is exactly why it could not wait for Phase 8.
 
-Do this **before** the SDF work, because baking outlines at build time changes what the SDF pipeline reads from — otherwise the shader gets written twice.
+Done **before** the SDF work, because baking outlines at build time changes what the SDF pipeline reads from — otherwise the shader gets written twice.
 
-- [ ] Measure the real transfer cost of a cold visit, per asset, brotli-compressed. Write the numbers down before changing anything.
-- [ ] **Drop fontkit from the runtime.** ~155KB gzipped today. Bake glyph outlines at build time in `scripts/build-sdf-atlas.ts` and interpolate at runtime — Phase 2 established that outlines are point-compatible across axis values, which is what makes this safe.
-- [ ] **Move Rapier off the `-compat` build.** It inlines its WebAssembly as base64 inside the JS bundle, which both inflates it and prevents the wasm being cached as its own file. Needs the ESM build plus whatever Vite configuration external wasm requires.
-- [ ] **Decide what mobile downloads.** The mobile fallback is a static image and one line of text. A phone should not pull ~2MB of ONNX Runtime to be told to come back on a desktop. Detect before loading anything heavy — this also changes where the Phase 3 mobile-fallback item lives.
-- [ ] Re-run the measurement. Record what each change actually bought.
+- [x] Measure the real transfer cost of a cold visit, per asset, brotli-compressed. Write the numbers down before changing anything. — `scripts/measure-payload.ts`, run with `pnpm measure`. Baseline **3487.3 KB**. The cold set is *derived* by following asset references transitively rather than declared, and verified against the browser's actual requests.
+- [x] **Drop fontkit from the runtime.** — done, and it takes `Archivo.ttf` with it: nothing at runtime parses the font any more. What is baked is the raw quadratic control points, not flattened polygons, so the flattening tolerance stays a runtime knob and `/debug/glyphs` can still sweep it. **−212.8 KB.** Lives in `scripts/build-glyph-outlines.ts`, not `build-sdf-atlas.ts` — the SDF is Phase 3 and gets its own script, reading these curves.
+- [x] **Move Rapier off the `-compat` build.** — **−120.7 KB**; base64-in-JS costs 443 KB brotli where the raw binary costs 319 KB. Vite 8 needs no plugin, but the dependency pre-bundle has to be told to leave it alone or the wasm-bindgen hand-off breaks **in dev only**.
+- [x] **Decide what mobile downloads.** — gated before any heavy import; **3487.3 KB → 21.6 KB**. The fallback still is captured from the room itself and ships as lossless WebP.
+- [x] Re-run the measurement. Record what each change actually bought. — table in `docs/build-log.md`.
+- [x] **Non-blocking first paint.** — not on the original list; added deliberately. The room no longer waits on the network to draw its first frame.
 
-**Exit criteria:** a cold desktop visit is under a defensible budget with the numbers written down, and a cold mobile visit downloads almost nothing. Lighthouse performance is checked here, not left as a surprise for Phase 8.
+**Exit criteria:** a cold desktop visit is under a defensible budget with the numbers written down, and a cold mobile visit downloads almost nothing. — **met.** Cold desktop **3174.1 KB**, cold mobile **21.6 KB**.
+
+> **The measurement reframed the phase before any code changed.** The ML — ONNX Runtime plus the model — is 75% of the payload, and *none* of the three fixes originally named here touch it. So mobile gating moved from third to first (it is a 99.4% cut, not a shave), non-blocking first paint was added, and the desktop expectation was reset honestly: the floor is the ML plus about 520 KB.
+
+> **Lighthouse 100 on performance is not reachable on the room route, for a reason payload cannot fix.** A WebGL canvas never registers a contentful paint, so Lighthouse returns `NO_FCP` and *no score at all* — even with words rendering. The mobile route, which has real DOM, scores 100/100/96/100. The fix is a contentful element, which DESIGN.md's footer supplies in Phases 4 and 7. **Phase 8's Lighthouse item should be treated as unverified on the room route until then**, not as confirmation. Flagged rather than fixed here: inventing DOM chrome now would be adding UI to a piece whose specification says there is none.
 
 ---
 
@@ -141,7 +146,7 @@ The visible design layer. At this point the piece should already be functional b
 - [ ] Word aging: soft cap at 200, fade-out of oldest. — note that frozen bodies are static; removal is fine, but any upward drift during fade-out needs them unfrozen first.
 - [ ] Clear (Cmd/Ctrl+K).
 - [ ] Focus/defocus handling.
-- [ ] Mobile fallback screen. — may already be partly handled by Phase 2.5's early detection.
+- [x] Mobile fallback screen. — **done in Phase 2.5**, since gating had to happen before any heavy import anyway. One thing is left for this phase: the still is captured from the *functional-and-ugly* build and must be regenerated once the room has its SDF, shadows, tint and grain. Its caption also wants the mono face below.
 - [ ] **Choose the mono face.** Still undecided since the typeface change. Only used at 10–12pt for the footer, credit line and export watermark, so this is low-stakes — but `DESIGN.md` and `brand-guidelines.md` both say "the mono face" and need filling in.
 - [ ] **Judge the character branch now that warmth is visible.** Nonsense reads mildly warm (`asdf` warmth +0.66) and neutral-mass rather than light, which is not what `DESIGN.md`'s "light, drifty, unstable" describes. Deferred from Phase 1c specifically so it could be judged as colour and motion rather than as numbers.
 - [ ] **Decide whether `age` gets a visual consequence.** Open since Phase 1a. Either give it one here or accept that it is a gravity-only input and record that in `axes.md`.
@@ -232,7 +237,7 @@ The "no deadline" phase, done with restraint.
 - [ ] OG image render.
 - [ ] Favicon.
 - [ ] Domain purchased and pointed. Still TBD.
-- [ ] Lighthouse audit. All four scores at 100. — performance should already be handled by Phase 2.5; this is confirmation, not discovery.
+- [ ] Lighthouse audit. All four scores at 100. — the **mobile route already scores 100 / 100 / 96 / 100** (Phase 2.5); the only deduction is the missing favicon, which is the item two lines above. The **room route cannot be scored at all** until the page has a contentful DOM element — see the Phase 2.5 note. Audit with real headful Chrome: a headless run returns `NO_FCP` for every page, including plain DOM ones, and looks exactly like the real finding.
 - [ ] Cross-browser test: latest Chrome, Safari, Firefox, Arc, Edge. — the WebGPU/WASM matrix no longer applies; the piece is WASM-only by measurement.
 - [ ] Five soft-launch testers. Watch them use it. Iterate on what they say for one week.
 - [ ] Feel tests 1–5 all pass with fresh eyes.
@@ -264,7 +269,8 @@ Carried items that belong to no single phase. Each is recorded in `docs/build-lo
 | --- | --- | --- |
 | ~~Words settle at arbitrary angles~~ | ~~Phase 2~~ | **Resolved** — rotation lifecycle, freeze keyed on linear stillness |
 | Freezing prevents drift | Phase 5a | Feel test 2 is entirely about drift. **Note:** wake-on-impact now unfreezes struck words, which is a partial precedent for the mechanism 5a needs |
-| ~3MB payload | Phase 2.5 | Lighthouse 100 is an exit criterion |
+| ~~~3MB payload~~ | ~~Phase 2.5~~ | **Resolved** — 3487 KB → 3174 KB desktop, 21.6 KB mobile |
+| The canvas never paints "contentful" | Phase 4 / 7 | Lighthouse scores the room route `NO_FCP`. Needs the footer's DOM text; re-run then |
 | Proper nouns and slurs in the vocabulary | Phase 8 | Launch-ending if missed |
 | Mono face undecided | Phase 3 | Two spec documents say "the mono face" |
 | `age` axis has no visual consequence | Phase 3 | Open since Phase 1a |

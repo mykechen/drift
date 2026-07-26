@@ -25,7 +25,12 @@ body {
   overflow: hidden;
 }
 
-body {
+/* The centring lives on <main> rather than <body> so the landmark can be a real
+   element in the layout. `display: contents` would have kept the old rule
+   working, but it has a history of dropping elements out of the accessibility
+   tree — which is the one thing the landmark exists to be in. */
+main {
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;

@@ -11,6 +11,14 @@
     <script type="module" src="/src/main.ts"></script>
   </head>
   <body>
-    <canvas id="room"></canvas>
+    <!-- The canvas is the whole document, so it is also the whole of the main
+         landmark. Without one, assistive technology has no way to skip to the
+         content, and Lighthouse's accessibility audit fails on it. -->
+    <main>
+      <canvas
+        id="room"
+        aria-label="Drift: a room where typed words fall and settle as physical objects."
+      ></canvas>
+    </main>
   </body>
 </html>
