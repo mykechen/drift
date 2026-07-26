@@ -60,14 +60,31 @@ async function commitWord(
   renderer.attach(body);
 }
 
-/** Build the room, wire the input, and start the frame loop. */
+/**
+ * Build the room, wire the input, and start the frame loop.
+ *
+ * **Nothing waits on the network that does not have to.** Until Phase 2.5 this
+ * awaited all three loads together and drew its first frame after the last of
+ * them — so the visitor sat on a blank page until 2.9MB of font, ONNX runtime
+ * and model had arrived, for a room that is empty anyway. Now the two fetches
+ * are started first and left in flight, the room is built from Rapier alone —
+ * which is local, since the `-compat` build carries its WebAssembly inline —
+ * and the frame loop starts against the empty room immediately. Typing is
+ * enabled when the assets that typing actually needs have landed.
+ *
+ * The staging is deliberately conservative: input waits for the *model*, not
+ * just the font. Committing a word before the model can score it would give it
+ * neutral properties, and a `boulder` that falls like a leaf because it was
+ * typed early fails the piece's first feel test. Better a room that is briefly
+ * not typeable than one that briefly lies.
+ */
 export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
   const renderer = createRoomRenderer(canvas);
 
-  // The three loads are independent and all needed before the first word can
-  // commit, so they run together rather than in sequence.
-  const [room, glyphs, properties] = await Promise.all([
-    createPhysicsRoom(renderer.aspect()),
+  // Started before anything is awaited, so the two long fetches are in flight
+  // while the room is being built. Collected into one promise here rather than
+  // awaited later so neither rejection is ever momentarily unhandled.
+  const assets = Promise.all([
     loadGlyphSource(DISPLAY_FONT_URL),
     // The room must still accept typing if inference cannot start, so a failed
     // model degrades to neutral scores rather than taking the piece down.
@@ -76,6 +93,8 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       return null;
     }),
   ]);
+
+  const room = await createPhysicsRoom(renderer.aspect());
 
   window.addEventListener("resize", (): void => {
     renderer.resize();
@@ -102,24 +121,6 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
     );
   });
 
-  attachWordInput(window, {
-    onChange(buffer): void {
-      // The uncommitted word renders at neutral axes, not at the axes its scores
-      // imply. Per DESIGN.md the model's opinion arrives *on commit* — that is the
-      // moment the commit spring exists to dramatise, and pre-empting it would
-      // spend the effect before the word is a body.
-      renderer.setDraft(
-        buffer.length === 0 ? null : glyphs.outlineFor(buffer, NEUTRAL_AXES),
-      );
-    },
-    onCommit(word): void {
-      // Cleared here rather than after inference resolves, so the draft does not
-      // linger for a frame on top of the body that replaces it.
-      renderer.setDraft(null);
-      void commitWord(renderer, properties, glyphs, room, word, cursorX);
-    },
-  });
-
   const loop = createFrameLoop({
     physicsHz: (): number => room.physicsHz(),
     step(fixedDeltaMs): void {
@@ -139,7 +140,34 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
     },
   });
 
+  // The empty room is on screen from here. Everything below waits on the
+  // network; nothing above it does.
   loop.start();
+  debug(
+    "loop",
+    `room ${room.roomWidth.toFixed(1)} units wide, awaiting assets`,
+  );
+
+  const [glyphs, properties] = await assets;
+
+  attachWordInput(window, {
+    onChange(buffer): void {
+      // The uncommitted word renders at neutral axes, not at the axes its scores
+      // imply. Per DESIGN.md the model's opinion arrives *on commit* — that is the
+      // moment the commit spring exists to dramatise, and pre-empting it would
+      // spend the effect before the word is a body.
+      renderer.setDraft(
+        buffer.length === 0 ? null : glyphs.outlineFor(buffer, NEUTRAL_AXES),
+      );
+    },
+    onCommit(word): void {
+      // Cleared here rather than after inference resolves, so the draft does not
+      // linger for a frame on top of the body that replaces it.
+      renderer.setDraft(null);
+      void commitWord(renderer, properties, glyphs, room, word, cursorX);
+    },
+  });
+
   debug(
     "loop",
     `ready · ${properties ? properties.backend : "no model"} · ` +

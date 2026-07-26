@@ -1087,3 +1087,99 @@ with the measurement:
   ones, and swapping to an unverified minimal runtime would put the inference
   correctness Phase 1 verified at risk for a fraction of the bytes. The honest
   move is to stop it blocking the paint, not to pretend it can be deleted.
+
+### Mobile gating — 3487 KB down to 21.7 KB
+
+`main.ts` is now nothing but the branch. It detects mobile per DESIGN.md and,
+critically, does so *before* the room is imported at all: the room hangs off
+`await import("./boot")`, so the bundler puts Rapier, OGL, fontkit, the ONNX
+runtime and everything they pull behind an edge a phone never traverses.
+
+| | before | after |
+|---|---|---|
+| cold mobile | 3487.3 KB | **21.7 KB** |
+| requests | 10 | **6** |
+
+Verified in the browser rather than inferred: at a 390×844 viewport the built
+preview makes exactly six requests — the HTML, three small scripts, the
+stylesheet and the still — and at 1440×900 it makes thirteen, none of which is
+the still.
+
+**"Touch-only" is `any-pointer: coarse` with no `any-pointer: fine` anywhere.**
+A touchscreen laptop reports both and gets the piece, because it has the
+keyboard the piece needs; a tablet reports only coarse and gets the fallback,
+because it does not. The check is deliberately not re-evaluated on resize — a
+desktop window dragged narrower should not tear down a room full of words.
+
+**The still is captured from the room, and it is a stub.** It is 240 words
+committed into the running piece, photographed at 4:3 — the narrowest frame
+DESIGN.md allows, chosen because at 16:9 the words are an illegible smudge at
+390px wide — then cropped down to the composition, because the room's empty air
+above the pile reads as a blank image on a phone. It ships as **lossless** WebP
+at 20 KB, which is *less than half* what quality-78 lossy costs (35.8 KB): the
+room is flat two-tone vector art, which is the case lossless was made for, and
+lossy rings visibly around glyph edges. It must be regenerated once Phase 3
+gives the room its SDF, shadows, tint and grain — this one is a picture of the
+functional-and-ugly build.
+
+One thing the capture surfaced in passing: filling the room from a mixed
+vocabulary, **200 commits settle to about 60 bodies**. The crush is doing far
+more clearing than the density cap, which never gets near 200. Recorded as an
+observation for Phase 3's density work, not acted on here.
+
+### Non-blocking first paint
+
+Not on the roadmap; added deliberately. `startRoom` awaited all three loads
+together and drew its first frame after the last of them, so nothing was on
+screen until 2.9 MB of font, ONNX runtime and model had arrived — for a room
+that is empty anyway. The two fetches are now started first and left in flight,
+the room is built from Rapier alone (local: the `-compat` build carries its
+WebAssembly inline), and the frame loop starts against the empty room
+immediately. Typing is enabled when the assets typing needs have landed.
+
+**Input waits for the model, not just the font, and that is the conservative
+choice on purpose.** A word committed before the model can score it gets neutral
+properties, and a `boulder` that falls like a leaf because it was typed early
+fails feel test 1. Better a room that is briefly not typeable than one that
+briefly lies. The alternative — let the room be typeable as soon as physics and
+glyphs are up, roughly 2.6 MB earlier — is a real option on a slow connection
+and is the author's call, not one to take silently.
+
+### The finding that actually threatens Phase 8: the canvas never paints
+
+Lighthouse cannot score the piece at all. Not a low score — **no score**:
+
+```
+Runtime error encountered: The page did not paint any content. (NO_FCP)
+```
+
+`performance.getEntriesByType("paint")` on the room reports `first-paint` and
+**no `first-contentful-paint`**, and no LCP entry, *even with words committed
+and rendering*. A WebGL canvas does not register as contentful content, and
+Drift's entire visible surface is one WebGL canvas.
+
+This was nearly recorded as a false finding. The first Lighthouse runs used the
+headless Chromium from the Playwright cache, and headless returned `NO_FCP` for
+**every** page including the plain-DOM `/debug/properties` — so the result there
+was an artifact of the harness, not a fact about the piece. Re-run against real
+headful Chrome, the three routes separate cleanly and the diagnosis holds:
+
+| Route | What it is | Lighthouse performance |
+|---|---|---|
+| `/debug/properties` | ordinary DOM page | 75 |
+| `/` at phone viewport | the fallback: `<img>` + text | **100** |
+| `/` at desktop viewport | the room: one WebGL canvas | **no score — NO_FCP** |
+
+Two things follow. The mobile route already meets the Phase 8 bar, which this
+phase's work is what earned. And **Lighthouse 100 on performance is currently
+unreachable on the room route for a reason payload cannot touch** — shaving
+every byte would not change it, because the metric is waiting for a contentful
+paint that never comes.
+
+The fix is a contentful element in the DOM, and the piece is already scheduled
+to grow one: DESIGN.md's footer — the sound toggle, the save and replay icons,
+the credit line — lands in Phases 4 and 7. Phase 3's cursor will *not* do it;
+the cursor is drawn into the canvas. This is flagged rather than fixed, because
+inventing DOM chrome now would be adding UI to a piece whose specification says
+there is none. **Re-run this measurement when the footer exists**, and treat
+Phase 8's Lighthouse item as unverified until then rather than as confirmation.
