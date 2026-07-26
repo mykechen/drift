@@ -42,3 +42,40 @@ canvas {
   max-width: calc(100dvh * var(--aspect-max-w) / var(--aspect-max-h));
   max-height: calc(100vw * var(--aspect-min-h) / var(--aspect-min-w));
 }
+
+/*
+ * The mobile fallback. Per DESIGN.md this is not a degraded piece, it is the
+ * whole of the piece for that visitor: a still of a composition and one line
+ * saying where to find the real thing. No dismiss, no back.
+ *
+ * The caption should be set in the mono face, which is still undecided — see
+ * the Phase 3 item in ROADMAP.md. Until it is chosen this uses the system mono
+ * stack, which is the right placeholder precisely because it is nobody's
+ * choice and will look wrong enough to get replaced.
+ */
+.fallback {
+  margin: 0;
+  padding: 0 6vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+}
+
+.fallback img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 60dvh;
+  object-fit: contain;
+}
+
+.fallback figcaption {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  text-align: center;
+  text-wrap: balance;
+  color: #1a1817;
+}
