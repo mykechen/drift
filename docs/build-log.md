@@ -1330,3 +1330,44 @@ words, against a 5ms budget. Feel test 1 holds at 896ms versus 2425ms, the same
 0.99 units where `boulder` drifts 0.01; a `mountain` crushes a bed of six light
 words and a `boulder` crushes none of six heavy ones; a struck pile wakes,
 shifts and re-freezes 7/7. Both debug pages work.
+
+### Phase 2 — the step-cost debt, closed
+
+The 10.5ms p50 predates the physics rework: free rotation, the restoring torque,
+collision events, per-step impact snapshots and the crush all landed after it,
+and none of them had been measured against the 16.7ms budget. The debt stayed
+open because every attempt to re-measure through the Playwright driver produced
+a number nobody could trust.
+
+**The trust problem has a clean answer, and it is an argument rather than a
+better harness.** A throttled browser inflates wall-clock readings; it never
+deflates them. So a *throttled* measurement that comes in under budget is
+sufficient proof — the real number can only be better. Only a reading that
+*fails* would need foreground Chrome to adjudicate.
+
+The other thing every previous attempt got wrong was measuring the wrong room. A
+settled room is cheap by construction, because freezing has already converted
+almost everything to static bodies:
+
+| Room state | bodies | awake | step p50 | p95 | max |
+|---|---|---|---|---|---|
+| Settled (sedimented) | 195 | 5 | 0.8ms | 0.9ms | 1.3ms |
+| **Filling, fully awake** | **198** | **199** | **6.2ms** | **6.9ms** | **8.1ms** |
+
+The second row is the real budget question — 199 bodies awake simultaneously
+across 7,671 colliders, which is the worst case the piece can produce — and it
+sits at **37% of the 16.7ms budget**, with the worst single step in the whole
+run at 8.1ms. Freezing is what makes the first row nearly free, but the piece is
+inside budget even with freezing contributing nothing at all.
+
+**Debt closed. The physics rework did not cost the budget.**
+
+> **An observation, not acted on: the crush is doing almost all the clearing.**
+> Filling this room took **358 commits to reach 198 bodies** — and that was with
+> heavyweights deliberately excluded, using only medium-mass words like `stone`,
+> `slate` and `gravel`. With a mixed vocabulary it is worse: 200 commits settle
+> to about 60. DESIGN.md specifies density management as a soft cap at 200 with
+> the oldest word fading out, but at this crush rate the room may never reach
+> 200, which would make that mechanism dead on arrival. Either the crush is too
+> aggressive or the cap is the wrong instrument. Recorded for Phase 3, where the
+> aging work lives; it is a feel judgement and belongs to the author.
