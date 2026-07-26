@@ -1017,3 +1017,73 @@ you try to apply to a light word (its bounce, its sway). And the crush bugs are 
 reminder that impact mechanics must read the world at the instant of contact;
 both were invisible in code review and obvious the moment a word was actually
 dropped on another.
+
+---
+
+## Phase 2.5 — payload
+
+**Goal:** know what a cold visit costs, and cut it. Lighthouse 100 on
+performance is a Phase 8 exit criterion, and every fix available here is
+structural — discovering it at Phase 8 means rewriting how the piece loads with
+a launch date in view. This phase runs *before* the SDF work because baking
+glyph outlines at build time changes what the SDF pipeline reads from, and doing
+SDF first means writing that shader twice.
+
+### The measurement comes first
+
+`scripts/measure-payload.ts` walks `dist/`, brotli-compresses every file at
+quality 11 — what a CDN actually serves — and reports the subset a first-time
+visitor on each route downloads. Run with `pnpm measure`.
+
+**The cold set is derived, not declared.** Starting from a route's HTML, every
+`/…`-rooted path referenced in the HTML, JS and CSS is followed recursively.
+Vite emits asset URLs as literal strings, so the `.wasm` and `.onnx` that are
+*fetched at runtime* rather than statically imported are found the same way the
+browser finds them. A hand-maintained list would silently drift from the build;
+this cannot. Verified against the real thing: a Playwright load of
+`pnpm preview` makes exactly the ten requests the script derives, no more and no
+fewer.
+
+### Baseline — cold desktop visit, brotli, before any change
+
+| Asset | Brotli | Raw | What it is |
+|---|---|---|---|
+| `ort-wasm-simd-threaded.wasm` | 2149.9 KB | 13164.0 KB | ONNX Runtime engine |
+| `properties.v1.onnx` | 483.3 KB | 569.7 KB | the model (int8, already compressed) |
+| `room.js` | 475.4 KB | 1703.9 KB | engine + Rapier's base64-inlined wasm + OGL |
+| `Archivo.ttf` | 191.7 KB | 643.2 KB | the font |
+| `typography.js` | 132.6 KB | 360.5 KB | fontkit + the glyph pipeline |
+| `properties.v1.vocab.txt` | 32.0 KB | 81.2 KB | the word list |
+| `properties.js` | 21.1 KB | 71.9 KB | ORT glue + the property model wiring |
+| `modulepreload-polyfill.js` | 0.7 KB | 1.6 KB | |
+| `index.html` | 0.3 KB | 0.8 KB | |
+| `room.css` | 0.2 KB | 0.4 KB | |
+| **TOTAL** | **3487.3 KB** | | |
+
+**Cold mobile visit: identical.** A phone downloads all 3.49 MB — the ONNX
+runtime, Rapier, fontkit, the model — in order to be shown a static image and
+one line of text telling it to come back on a desktop.
+
+### What the baseline says, before touching anything
+
+The number that reframes the phase: **the ML alone is 75% of the payload**
+(2149.9 + 483.3 = 2633.2 KB of 3487.3), and *not one* of the three fixes the
+roadmap named touches it. The roadmap's items — drop fontkit, un-inline Rapier's
+wasm, gate mobile — were written against an intuition about which files looked
+big, and two of the three are real but modest. So the plan changed on contact
+with the measurement:
+
+- **Mobile gating is the largest single win available**, and it is a
+  90%-plus cut rather than a shave. It was listed third; it goes first.
+- **Non-blocking first paint is the real desktop lever.** `main.ts` blocks the
+  first render on `Promise.all([createPhysicsRoom, loadGlyphSource,
+  loadPropertyModel])` — nothing is on screen until all 3.49 MB has arrived and
+  parsed. Lighthouse scores *when pixels appear*, not how many bytes followed.
+  This was not on the roadmap at all; it is a deliberate scope addition, taken
+  because shaving 130 KB off a 3.49 MB payload cannot move a metric that
+  non-blocking paint moves outright.
+- **The ML floor is the ML floor.** ORT's WebAssembly binary is not negotiable
+  — Phase 1c measured the alternatives and the smaller builds are the slower
+  ones, and swapping to an unverified minimal runtime would put the inference
+  correctness Phase 1 verified at risk for a fraction of the bytes. The honest
+  move is to stop it blocking the paint, not to pretend it can be deleted.
