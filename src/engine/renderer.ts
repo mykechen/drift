@@ -75,6 +75,21 @@ const MAX_DEVICE_PIXEL_RATIO = 2;
 const CRUSH_FADE_MS = 320;
 
 /**
+ * The aging exit, per DESIGN.md: "2s ease-out, opacity + slight upward drift +
+ * weight tapering to 300 as it goes. Read: the word is being forgotten, not
+ * deleted."
+ *
+ * **The weight taper is deliberately not implemented.** Tapering `wght` to 300
+ * over two seconds is the same per-frame axis change the commit spring rejected
+ * and costs the same — a bake and a texture per axis quantum, for a word that
+ * is on its way out. The scale-down stands in for it: a word that shrinks
+ * slightly as it rises reads as receding, which is the same thought.
+ */
+const AGE_FADE_MS = 2000;
+const AGE_DRIFT_EM = 0.35;
+const AGE_SCALE_TO = 0.97;
+
+/**
  * What the commit spring drives, and what it deliberately does not.
  *
  * DESIGN.md springs `wght` and `wdth` from neutral to the model's values. That
@@ -254,6 +269,17 @@ export interface RoomRenderer {
    */
   readonly crush: (id: number) => void;
   /**
+   * Begin the aging exit for a word physics has already released: it drifts
+   * upward, shrinks slightly and fades over 2s, then is disposed.
+   *
+   * Read: the word is being forgotten, not deleted. The crush is the violent
+   * exit; this is the quiet one. A no-op if the id has no live mesh.
+   *
+   * `delayMs` staggers the start, which is what `clear` uses to fade a whole
+   * room newest-last.
+   */
+  readonly fade: (id: number, delayMs?: number) => void;
+  /**
    * Freeze or resume the caret's pulse.
    *
    * Per DESIGN.md the pulse stops when the window loses focus. It freezes at
@@ -360,6 +386,26 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
    * must not be stepping two hundred springs that have all stopped moving.
    */
   const committing = new Map<number, Spring>();
+  /**
+   * Words aging out: their meshes, where they were standing when physics let
+   * go, and when the fade should start.
+   *
+   * The position is captured at the moment of release rather than read per
+   * frame, because there is no body left to read it from — which is exactly why
+   * this path needs no unfreezing. ROADMAP warned that "any upward drift during
+   * fade-out needs them unfrozen first"; once physics has dropped the body,
+   * there is nothing frozen to unfreeze.
+   */
+  const fading = new Map<
+    number,
+    {
+      meshes: WordMeshes;
+      startMs: number;
+      x: number;
+      y: number;
+      rotation: number;
+    }
+  >();
   /** The word being typed. One at a time, replaced wholesale on each keystroke. */
   let draft: WordMeshes | null = null;
   /**
@@ -632,6 +678,10 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       (entry.meshes.ink.program.uniforms["uInk"] as { value: number[] }).value =
         inkForWarmth(entry.meshes.warmth, tint);
     }
+    for (const entry of fading.values()) {
+      (entry.meshes.ink.program.uniforms["uInk"] as { value: number[] }).value =
+        inkForWarmth(entry.meshes.warmth, tint);
+    }
     if (draft) {
       (draft.ink.program.uniforms["uInk"] as { value: number[] }).value =
         inkForWarmth(draft.warmth, tint);
@@ -707,6 +757,37 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     crushing.set(id, { meshes: pair, startMs: performance.now() });
   }
 
+  function fade(id: number, delayMs = 0): void {
+    const pair = meshes.get(id);
+    if (!pair) return;
+    meshes.delete(id);
+    committing.delete(id);
+
+    // Where the word was standing, read back from the transform the last frame
+    // gave it. There is no body to ask any more — physics released it before
+    // this was called — and the mesh is the only remaining record of where it
+    // sat.
+    const translation = (
+      pair.ink.program.uniforms["uTranslation"] as { value: number[] }
+    ).value;
+    const rotation = (
+      pair.ink.program.uniforms["uRotation"] as { value: number }
+    ).value;
+
+    fading.set(id, {
+      meshes: pair,
+      startMs: performance.now() + delayMs,
+      x: translation[0] ?? 0,
+      y: translation[1] ?? 0,
+      rotation,
+    });
+  }
+
+  /** Decelerating, per DESIGN.md's "2s ease-out". */
+  function easeOut(t: number): number {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
   function step(fixedDeltaMs: number): void {
     if (committing.size === 0) return;
     for (const [id, spring] of committing) {
@@ -721,6 +802,8 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     committing.clear();
     for (const entry of crushing.values()) detach(entry.meshes);
     crushing.clear();
+    for (const entry of fading.values()) detach(entry.meshes);
+    fading.clear();
     setDraft(null);
   }
 
@@ -738,6 +821,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     attach,
     setDraft,
     crush,
+    fade,
     step,
     setPulsePaused(paused: boolean): void {
       // Resample the clock on resume so the time spent paused is not counted as
@@ -830,6 +914,54 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           // keeping whatever the last spring step left behind.
           (pair.shadow.program.uniforms["uBlur"] as { value: number }).value =
             pair.blurTarget * arrival;
+        }
+      }
+
+      if (fading.size > 0) {
+        const now = performance.now();
+        for (const [id, entry] of fading) {
+          // Staggered fades sit at a negative elapsed until their turn comes.
+          // Until then they hold still at full opacity, which is what makes the
+          // clear gesture read as a wave rather than as everything dimming at
+          // once.
+          const elapsed = now - entry.startMs;
+          const t = Math.max(0, elapsed / AGE_FADE_MS);
+          if (t >= 1) {
+            detach(entry.meshes);
+            fading.delete(id);
+            continue;
+          }
+          const eased = easeOut(t);
+          const scale = 1 + (AGE_SCALE_TO - 1) * eased;
+          // Upward drift: the word rises as it is forgotten.
+          const y = entry.y + AGE_DRIFT_EM * eased * wordScale;
+
+          // Motion eases out; opacity does not, and the difference matters.
+          // Running opacity through the same curve leaves the word 87.5% gone
+          // at the halfway point — measured, it stopped registering at all
+          // after about 1s of a 2s fade, so the back half of the drift was
+          // spent on something invisible. Linear opacity makes the specified
+          // two seconds the duration you actually see.
+          place(entry.meshes.ink, entry.x, y, entry.rotation, 0, scale);
+          (
+            entry.meshes.ink.program.uniforms["uAlpha"] as { value: number }
+          ).value = 1 - t;
+
+          if (entry.meshes.shadow) {
+            place(
+              entry.meshes.shadow,
+              entry.x,
+              y,
+              entry.rotation,
+              entry.meshes.dropTarget,
+              scale,
+            );
+            (
+              entry.meshes.shadow.program.uniforms["uAlpha"] as {
+                value: number;
+              }
+            ).value = SHADOW_OPACITY * (1 - t);
+          }
         }
       }
 

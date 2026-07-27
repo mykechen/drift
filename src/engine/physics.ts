@@ -339,6 +339,15 @@ export interface PhysicsRoom {
    * animation — physics has already removed the bodies. Drains the queue.
    */
   drainCrushed(): number[];
+  /**
+   * Drop one word from the world by id. Returns false if the id is unknown.
+   *
+   * The caller owns whatever the word does on its way out — this only ends its
+   * participation in the simulation. Body type does not matter: a frozen word
+   * is removed exactly like a falling one, which is what lets the aging fade
+   * drift a settled word upward without having to unfreeze it first.
+   */
+  remove(id: number): boolean;
   /** Remove every body. */
   clear(): void;
 }
@@ -772,6 +781,13 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
           stillForMs.delete(wordBody.id);
         }
       }
+    },
+
+    remove(id: number): boolean {
+      const wordBody = bodies.find((candidate) => candidate.id === id);
+      if (!wordBody) return false;
+      removeWord(wordBody);
+      return true;
     },
 
     drainCrushed(): number[] {
