@@ -382,7 +382,123 @@ const COMMIT_IMPULSE_UNITS_PER_S = -1.2;
  * still on the live surface, moves.
  */
 const FREEZE_LINEAR_SPEED = 0.08;
-const FREEZE_AFTER_MS = 1500;
+
+/**
+ * How restless a word is, in [0, 1]. **A property of the word, like its mass.**
+ *
+ * The piece's thesis is that meaning becomes physics, and until now that only
+ * applied to falling — every word, having landed, turned to stone at the same
+ * rate. Extending it to aliveness is what turns the freeze from a performance
+ * hack into a semantic rule: a light word never quite settles, a heavy one is
+ * dead still and always will be.
+ *
+ * Lightness is the spine. Intensity is a signed modifier of a quarter, so a
+ * loud word stays restless at middling weight and a quiet one settles early
+ * even when it is light. Both axes already drive the glyph's shape; this makes
+ * them drive its behaviour. Measured, the two words that earn the intensity
+ * term are `silence` at 0.39 — light, but held still by what it means — and
+ * `thunder` at 0.40, heavy but never quite stone.
+ *
+ *     cloud 0.77   alarm 0.77   mist 0.73   feather 0.66   hush 0.59
+ *     — threshold —
+ *     rubber 0.47   stone 0.25   boulder 0.07   mountain 0.00
+ */
+function liveliness(scores: PropertyScores): number {
+  return Math.max(
+    0,
+    Math.min(
+      1,
+      (1 - scores.mass) / 2 + scores.intensity * LIVELINESS_FROM_INTENSITY,
+    ),
+  );
+}
+
+const LIVELINESS_FROM_INTENSITY = 0.25;
+
+/**
+ * Above this, a word never freezes at all — it stays dynamic for the whole
+ * session and keeps answering to the room's air.
+ */
+const LIVELINESS_NEVER_FREEZES = 0.5;
+
+/**
+ * How long a word must hold still before it turns to stone, across the range
+ * that still turns to stone at all.
+ *
+ * Phase 2 used a flat 1500ms for everything, and the flatness is what made the
+ * room read as sediment rather than as a place: a feather and a mountain went
+ * rigid on the same schedule. Sediment still forms — it now forms at a rate
+ * that means something.
+ */
+const FREEZE_AFTER_MS_AT_DEADEST = 400;
+const FREEZE_AFTER_MS_AT_THRESHOLD = 4000;
+
+/**
+ * Milliseconds of stillness before this word freezes, or **null if it never
+ * does**.
+ */
+function freezeDelayFor(alive: number): number | null {
+  if (alive >= LIVELINESS_NEVER_FREEZES) return null;
+  const t = alive / LIVELINESS_NEVER_FREEZES;
+  return (
+    FREEZE_AFTER_MS_AT_DEADEST +
+    t * (FREEZE_AFTER_MS_AT_THRESHOLD - FREEZE_AFTER_MS_AT_DEADEST)
+  );
+}
+
+// --- The room's air ---------------------------------------------------------
+
+/**
+ * The room breathes, and mass decides who notices.
+ *
+ * A word that merely stops freezing does not move: the build log already
+ * established that waking a settled body is a no-op, because a settled body is
+ * in equilibrium. So liveliness needs something to move *against*, and this is
+ * it — one shared low-frequency field rather than per-word twitching, because
+ * the claim being made is that the room has air, not that each word is
+ * independently restless.
+ *
+ * **Phase comes from position, not from id.** A word's place in the cycle
+ * depends on where it is standing, so the breath crosses the room as a slow
+ * broad wave — one field that things are *in*, rather than two hundred
+ * oscillators that happen to share a frequency. It is also stable: a word's
+ * phase does not jump when the room around it changes.
+ */
+const BREATH_HZ = 0.11;
+const BREATH_WAVE_PER_UNIT = 0.35;
+
+/**
+ * The breath is primarily a **torque**, and that is a physical necessity rather
+ * than a taste.
+ *
+ * Sliding a resting word means overcoming friction, which at `FRICTION` 0.85
+ * needs an acceleration of roughly `0.85 × 9.81` — comparable to gravity. A
+ * force that large is a gale, not a breath, and a sustained lateral force on a
+ * whole pile risks making it walk, since friction resists but never restores.
+ *
+ * Rocking costs almost nothing by comparison, and it is *bounded for free*: the
+ * righting torque's deadband (`ORIENT_DEADBAND`, 8°) is exactly the band inside
+ * which no restoring torque acts, so a word breathes within it and is pushed
+ * back the moment it leaves. The mechanism that keeps words readable is the
+ * same one that keeps the breath from becoming a drift.
+ */
+const BREATH_TORQUE = 0.9;
+
+/** A little lateral push as well — enough to stir what is loose, not to shove. */
+const BREATH_SWAY_ACCEL = 1.4;
+
+/**
+ * How much air a word feels, in [0, 1].
+ *
+ * **Ramped from zero at the freeze threshold**, so the two halves of liveliness
+ * cannot disagree: a word on the edge of settling has no breath to fight and
+ * freezes cleanly, and there is no discontinuity to see at the boundary where
+ * one behaviour becomes the other.
+ */
+function breathFactor(alive: number): number {
+  if (alive <= LIVELINESS_NEVER_FREEZES) return 0;
+  return (alive - LIVELINESS_NEVER_FREEZES) / (1 - LIVELINESS_NEVER_FREEZES);
+}
 
 // --- Density-aware rate -----------------------------------------------------
 
@@ -396,6 +512,12 @@ export interface WordBody {
   readonly word: string;
   readonly geometry: WordGeometry;
   readonly scores: PropertyScores;
+  /**
+   * How restless this word is, in [0, 1] — see `liveliness`. Decides whether it
+   * ever turns to stone, how fast it does if it does, and how much of the
+   * room's air it feels.
+   */
+  readonly liveliness: number;
   /** World-unit position of the body's centre, refreshed each step. */
   x: number;
   y: number;
@@ -942,6 +1064,7 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
         word,
         geometry,
         scores,
+        liveliness: liveliness(scores),
         x: 0,
         y: 0,
         rotation: 0,
@@ -1050,6 +1173,38 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
           );
         }
 
+        // The room's air. Phased by position, so it crosses the room as one
+        // slow wave rather than as two hundred separate oscillators, and mostly
+        // a torque — see BREATH_TORQUE for why sliding a resting word is not
+        // affordable and rocking one is.
+        const breath = breathFactor(wordBody.liveliness);
+        if (breath > 0) {
+          const wave = Math.sin(
+            (elapsedMs / 1000) * BREATH_HZ * 2 * Math.PI +
+              wordBody.x * BREATH_WAVE_PER_UNIT,
+          );
+          const seconds = fixedDeltaMs / 1000;
+          // `wakeUp: true`, and it is the whole mechanism rather than a detail.
+          // Not freezing a word is *not enough to keep it alive*: Rapier puts a
+          // settled dynamic body to sleep on its own, and a sleeping body
+          // silently discards an impulse applied with `wakeUp: false`. Measured
+          // — a `cloud` ten seconds after landing came back `frozen: false,
+          // asleep: true` and had moved 0.000 units in twelve seconds of
+          // breathing. The freeze was never the only thing making the room
+          // dead; it was only the half that was documented.
+          body.applyImpulse(
+            {
+              x: wave * breath * BREATH_SWAY_ACCEL * body.mass() * seconds,
+              y: 0,
+            },
+            true,
+          );
+          body.applyTorqueImpulse(
+            wave * breath * BREATH_TORQUE * body.mass() * seconds,
+            true,
+          );
+        }
+
         // Right the word once it has slowed — a word still in flight keeps
         // tumbling. Inside the deadband the torque is zero, so a settled word
         // can go still and freeze. wakeUp=false so righting never wakes a
@@ -1076,7 +1231,10 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
           : 0;
         stillForMs.set(wordBody.id, elapsed);
 
-        if (elapsed >= FREEZE_AFTER_MS) {
+        // Null for a word too alive to ever settle: it stays dynamic for the
+        // whole session, which is the point.
+        const freezeAfterMs = freezeDelayFor(wordBody.liveliness);
+        if (freezeAfterMs !== null && elapsed >= freezeAfterMs) {
           // Not `sleep()` — see the note on the freeze constants. Fixed bodies
           // are outside the island graph, so this cannot be undone by a
           // neighbour waking up. Only a hard impact reverts it, via wakeFrozen.
