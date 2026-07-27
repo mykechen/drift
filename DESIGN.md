@@ -25,7 +25,9 @@ All values final. Use exactly these hex codes.
 | Accent (cursor only)     | `#D94F1E`      | Deep coral-red                                          |
 | Special: color-word tint | word-dependent | See "Special Behaviors" below                           |
 
-**Semantic tint mapping:** each word's `warmth` score from the property model interpolates between `#152838` (score = -1) and `#3A2418` (score = +1) through `#1A1817` (score = 0). Keep the effect subtle — a viewer should read the room as monochromatic at a glance and only notice tinting on inspection.
+**Semantic tint mapping:** each word's `warmth` score interpolates between `#152838` and `#3A2418` through `#1A1817` (score = 0).
+
+> **Changed in Phase 3.** The endpoints were originally reached at score ±1.0, and the effect was invisible for a reason that was in the data rather than the colours: measured over the 10,750 labelled words, **58% score |warmth| < 0.3 and only 5% exceed 0.6**, so nearly every word rendered within a hair of neutral and the two declared colours were decoration nothing ever touched. The endpoints are now reached at **±0.5**, roughly the p10–p90 spread of the real distribution. The colours are unchanged; what changed is that words arrive at them. The room still reads as broadly monochromatic — most words sit near neutral — but `marble` against `cedar` is now legible rather than theoretical.
 
 **Time-of-day shift:** the background hue is offset over a 24-hour cycle keyed to the user's local time.
 
@@ -126,6 +128,7 @@ The ambient bed is the piece's atmosphere. Get it right. Reference: the ambient 
 - Letters are NOT physics bodies yet. They are ordinary rendered text bound to the cursor.
 - No shadow beneath in-progress letters.
 - Backspace erases the last letter. If the word is empty, backspace is a no-op (small subtle shake to indicate).
+- Only letters may be typed. Any other printable key shakes and is discarded.
 
 ### Commit (space or enter)
 
@@ -139,12 +142,13 @@ The ambient bed is the piece's atmosphere. Get it right. Reference: the ambient 
 
 ### Punctuation
 
-- Trailing punctuation on a word (`hello,` `world.` `wait?!`) is preserved in the glyph but stripped before ML inference. The physical body includes the punctuation as part of its shape.
-- Standalone punctuation (typing `.` alone then space) is not committed. Subtle shake, no commit.
+**Changed in Phase 3: there is no punctuation.** Non-letter keys are refused at the *keystroke* — they never enter the buffer, and the caret shakes. You cannot type `hello,` at all.
+
+The original rule preserved trailing punctuation in the glyph while stripping it before inference. It was coherent, but it sat oddly beside the word check below: if the room only accepts real words, admitting `hello,` as a word-plus-ornament is a second, softer standard. One rule — letters only — is easier to feel and needs no explanation.
 
 ### Numbers
 
-- Any word containing a digit is rejected on commit. Subtle shake, no commit.
+- Digits are refused at the keystroke, like all non-letters. They never enter the buffer; the caret shakes.
 - Rationale: this is a piece about language.
 
 ### Empty commits
@@ -166,8 +170,12 @@ The ambient bed is the piece's atmosphere. Get it right. Reference: the ambient 
 
 ### Out-of-vocabulary words
 
-- The character-level branch of the property model handles any string. Never refuse a commit because the model hasn't seen the word.
-- Nonsense strings ("asdf", "qwerty") should get plausible-feeling properties — usually light, drifty, unstable. This is a feature.
+- The character-level branch of the property model handles any word the model has not seen. **Never refuse a commit because the *model* hasn't seen the word** — that is what the branch is for, and it scores roughly 67,000 words outside the model's 10,749-word vocabulary.
+- **Changed in Phase 3: a string that is not a word is refused.** The room checks a shipped lexicon (~78,000 words) before committing.
+
+> The original rule made nonsense "a feature": `asdf` and `qwerty` were to get plausible-feeling properties, "usually light, drifty, unstable". Two things killed it. Measured in Phase 1c, `asdf` came out **warmth +0.66 and neutral mass** — not light and drifty, just arbitrary, because a word's physical feel is semantic rather than orthographic and there is nothing in those letters to read. And the piece's whole argument is that mass comes from meaning; a room where `asdfgh` lands with a weight contradicts its own premise.
+>
+> The refusal is a *shake with the word intact*, not a deletion — you can fix `asdfgh` into `ash` without retyping.
 
 ### Repeat words
 

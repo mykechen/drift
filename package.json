@@ -11,6 +11,7 @@
     "measure": "node scripts/measure-payload.ts",
     "bake:glyphs": "node scripts/build-glyph-outlines.ts",
     "bake:mono": "node scripts/build-mono-subset.ts",
+    "bake:lexicon": "uv run --with wordfreq python model/build_lexicon.py",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",

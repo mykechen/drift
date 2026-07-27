@@ -32,6 +32,7 @@ import {
   normalizeWord,
   type PropertyModel,
 } from "./ml/properties";
+import { loadLexicon, type Lexicon } from "./ml/lexicon";
 import { NEUTRAL_SCORES } from "./ml/fallback";
 import { debug } from "./util/debug";
 
@@ -43,6 +44,37 @@ import { debug } from "./util/debug";
  * asynchronous and at ~0.1ms the wait lands well inside a single frame, which
  * is what DESIGN.md's "synchronously" actually needs to mean.
  */
+/**
+ * Whether the room will take this string, decided synchronously.
+ *
+ * Separate from `commitWord` because the answer has to be immediate: the input
+ * layer keeps the buffer on a refusal so the visitor can fix the word, and it
+ * cannot wait on inference to find out. Validation is two set lookups; scoring
+ * is the async part and only happens once the answer is yes.
+ *
+ * `lexicon` may be null if its fetch failed, in which case anything spellable
+ * is accepted — a room that refuses every word is broken in a way a briefly
+ * permissive one is not.
+ */
+function canCommit(lexicon: Lexicon | null, raw: string): boolean {
+  // `normalizeWord` still carries the length cap and the digit rule. Both are
+  // now also enforced at the keystroke, so this is defence rather than the
+  // primary gate — but it is the one place that cannot be bypassed.
+  const word = normalizeWord(raw);
+  if (word === null) return false;
+  return lexicon === null || lexicon.has(word);
+}
+
+/**
+ * Commit one word: score it, render it at the axes its scores imply, cut it
+ * into hulls, and drop it in.
+ *
+ * Inference is awaited rather than blocking. `session.run()` is always
+ * asynchronous and at ~0.1ms the wait lands well inside a single frame, which
+ * is what DESIGN.md's "synchronously" actually needs to mean.
+ *
+ * Assumes `canCommit` has already said yes.
+ */
 async function commitWord(
   renderer: ReturnType<typeof createRoomRenderer>,
   model: PropertyModel | null,
@@ -50,37 +82,21 @@ async function commitWord(
   physics: PhysicsRoom,
   raw: string,
   spawnX: number,
-): Promise<boolean> {
-  // Rejection is decided here, not inferred from a missing prediction, and the
-  // difference was a real bug. `normalizeWord` already implements all three of
-  // DESIGN.md's refusals — a digit anywhere, nothing left after stripping
-  // trailing punctuation, longer than 24 characters — but this function used to
-  // read a null *prediction* as "the model is unavailable" and commit anyway
-  // with neutral scores. The rule was computed and then discarded, so `hello123`
-  // became a body. Asking directly separates "this input is not a word" from
-  // "inference is not running", which are opposite situations: the first must
-  // refuse, the second must still let the room work.
-  if (normalizeWord(raw) === null) return false;
-
+): Promise<void> {
   const prediction = model ? await model.predict(raw) : null;
   const scores = prediction?.scores ?? NEUTRAL_SCORES;
 
-  // The glyph keeps its punctuation; only the *model* sees the stripped word.
-  // DESIGN.md: "Trailing punctuation on a word is preserved in the glyph but
-  // stripped before ML inference. The physical body includes the punctuation as
-  // part of its shape." This used to draw `prediction.word`, which is the
-  // stripped form — so `hello,` committed as a body reading `hello` and the
-  // comma was silently dropped from both the picture and the collider. The bake
-  // covers all printable ASCII, so the comma was always available; nothing was
-  // asking for it.
+  // Letters only reach here — punctuation and digits are refused at the
+  // keystroke — so the glyph is simply the word, lowercased. DESIGN.md's
+  // "trailing punctuation is preserved in the glyph" rule no longer applies,
+  // because no punctuation can be typed; see the note in that document.
   const glyph = raw.toLowerCase();
 
   const geometry = glyphSource.geometryFor(glyph, axesForScores(scores));
   const body = physics.commit(glyph, geometry, scores, spawnX);
-  if (!body) return false;
+  if (!body) return;
 
   renderer.attach(body);
-  return true;
 }
 
 /**
@@ -110,6 +126,15 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
   // awaited later so neither rejection is ever momentarily unhandled.
   const assets = Promise.all([
     loadGlyphSource(),
+    // The lexicon decides what counts as a word. It is ~157 KB against the
+    // model's 483 KB and loads alongside it, so it costs no perceptible wait —
+    // typing was already gated on the model arriving. A failed load degrades to
+    // accepting everything rather than accepting nothing: a room that refuses
+    // every word is broken in a way a room that is briefly permissive is not.
+    loadLexicon().catch((error: unknown): null => {
+      debug("ml", "lexicon unavailable, accepting any word", error);
+      return null;
+    }),
     // The room must still accept typing if inference cannot start, so a failed
     // model degrades to neutral scores rather than taking the piece down.
     loadPropertyModel().catch((error: unknown): null => {
@@ -206,7 +231,7 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
     `room ${room.roomWidth.toFixed(1)} units wide, awaiting assets`,
   );
 
-  const [glyphs, properties] = await assets;
+  const [glyphs, lexicon, properties] = await assets;
 
   attachWordInput(window, {
     onChange(buffer): void {
@@ -218,18 +243,16 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
         buffer.length === 0 ? null : glyphs.outlineFor(buffer, NEUTRAL_AXES),
       );
     },
-    onCommit(word): void {
+    onCommit(word): boolean {
+      // Answered synchronously so the draft survives a refusal and shakes in
+      // place. Only once the room has said yes is the draft cleared and the
+      // word handed to inference.
+      if (!canCommit(lexicon, word)) return false;
       // Cleared here rather than after inference resolves, so the draft does not
       // linger for a frame on top of the body that replaces it.
       renderer.setDraft(null);
-      void commitWord(renderer, properties, glyphs, room, word, cursorX).then(
-        (committed): void => {
-          // A refused word shakes. The draft is already gone by now, so what
-          // shakes is the caret alone — which is the right reading: the room
-          // declined to take the word, and there is nothing left to shake.
-          if (!committed) renderer.shake();
-        },
-      );
+      void commitWord(renderer, properties, glyphs, room, word, cursorX);
+      return true;
     },
     onRejected(): void {
       renderer.shake();
@@ -251,6 +274,7 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       world,
       loop,
       glyphs,
+      lexicon,
       properties,
       renderer,
       commit: (word: string, spawnX = cursorX) =>

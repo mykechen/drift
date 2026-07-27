@@ -51,6 +51,41 @@ function channel(hex: string, index: number): number {
 }
 
 /**
+ * How hard to push warmth toward the palette's two ink extremes.
+ *
+ * The tint read as almost nothing for a reason that was in the *data*, not the
+ * colours. `INK_COOLEST` and `INK_WARMEST` were only reached at warmth ±1.0,
+ * and measured over the 10,750 labelled words, **58% score |warmth| < 0.3 and
+ * only 5% exceed 0.6** — so nearly every word rendered within a hair of neutral
+ * and the two declared colours were decoration nothing ever touched.
+ *
+ * A gain of 2 makes ±0.5 reach the endpoints, which is roughly the p10–p90
+ * spread of the real distribution. The extremes stay exactly as DESIGN.md
+ * declares them; what changes is that words actually arrive at them.
+ */
+const WARMTH_GAIN = 2;
+
+/**
+ * How much of its ink an old word gives up to the paper.
+ *
+ * `age` originally showed only as an eroded, softened edge, which was a
+ * boundary difference you had to hunt for. Old writing fades, and fading is
+ * legible at a glance because it changes the whole word's tone rather than one
+ * pixel of its outline. The erosion stays — faded *and* slightly eaten is what
+ * old ink on old paper looks like — but this is the half that reads.
+ *
+ * Mixing toward the background rather than lowering alpha, so a worn word does
+ * not go translucent over the words behind it.
+ *
+ * Applied to **positive age only**. Mapping the full −1…+1 range onto the fade
+ * meant a word of neutral age was already 15% washed out, which broke
+ * DESIGN.md's promise that a neutral word lands exactly on `INK` — and since
+ * most words sit near the middle, it lightened the whole room rather than
+ * marking the old ones. Only what is actually old fades; everything else is ink.
+ */
+const AGE_FADE_TOWARD_PAPER = 0.22;
+
+/**
  * Ink for a word, interpolated by its `warmth` score and shifted by the hour.
  *
  * Per DESIGN.md this runs `INK_COOLEST` → `INK` → `INK_WARMEST` across
@@ -67,8 +102,9 @@ function channel(hex: string, index: number): number {
 export function inkForWarmth(
   warmth: number,
   tint?: RoomTint,
+  age = 0,
 ): [number, number, number] {
-  const clamped = Math.max(-1, Math.min(1, warmth));
+  const clamped = Math.max(-1, Math.min(1, warmth * WARMTH_GAIN));
   const from = clamped < 0 ? INK_COOLEST : INK;
   const to = clamped < 0 ? INK : INK_WARMEST;
   const t = clamped < 0 ? clamped + 1 : clamped;
@@ -79,14 +115,32 @@ export function inkForWarmth(
     channel(from, 2) + (channel(to, 2) - channel(from, 2)) * t,
   ];
 
-  if (!tint) return rgb;
+  const shifted: [number, number, number] = tint
+    ? toRgb(
+        toHsl(rgb)[0] + tint.inkHueShift,
+        toHsl(rgb)[1],
+        toHsl(rgb)[2] + tint.inkLightnessLift,
+      )
+    : rgb;
 
-  const hsl = toHsl(rgb);
-  return toRgb(
-    hsl[0] + tint.inkHueShift,
-    hsl[1],
-    hsl[2] + tint.inkLightnessLift,
-  );
+  // Age fades the word toward the paper it sits on — a no-op on everything the
+  // model rates neutral or modern, which is most of the room.
+  const fade = Math.max(0, Math.min(1, age)) * AGE_FADE_TOWARD_PAPER;
+  if (fade === 0) return shifted;
+
+  const paper = tint
+    ? tint.background
+    : ([
+        channel(BACKGROUND, 0),
+        channel(BACKGROUND, 1),
+        channel(BACKGROUND, 2),
+      ] as [number, number, number]);
+
+  return [
+    shifted[0] + (paper[0] - shifted[0]) * fade,
+    shifted[1] + (paper[1] - shifted[1]) * fade,
+    shifted[2] + (paper[2] - shifted[2]) * fade,
+  ];
 }
 
 /** Procedural background grain, per DESIGN.md. */

@@ -49,8 +49,13 @@ import { debug } from "../util/debug";
 interface WordMeshes {
   readonly ink: Mesh;
   readonly shadow: Mesh | null;
-  /** Kept so the ink can be rewritten when the time-of-day tint moves. */
+  /**
+   * Kept so the ink can be rewritten when the time-of-day tint moves. `age`
+   * rides along because it also feeds the ink now — an old word is faded toward
+   * the paper, and the paper's colour moves with the hour.
+   */
   readonly warmth: number;
+  readonly age: number;
   /**
    * Where the shadow's blur and drop end up. The commit spring grows both from
    * nothing, so the settled values have to be remembered rather than written
@@ -634,7 +639,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     if (!inkMesh) return null;
 
     (inkMesh.program.uniforms["uInk"] as { value: number[] }).value =
-      inkForWarmth(warmth, currentTint ?? undefined);
+      inkForWarmth(warmth, currentTint ?? undefined, age);
     // Wear is written once — `age` never changes for a committed word, unlike
     // the tint, which is why this needs no per-frame refresh.
     const wear = wearForAge(age);
@@ -648,6 +653,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       ink: inkMesh,
       shadow: null,
       warmth,
+      age,
       blurTarget: 0,
       dropTarget: 0,
     };
@@ -680,6 +686,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       ink: inkMesh,
       shadow: shadowMesh,
       warmth,
+      age,
       blurTarget,
       dropTarget: shadowDropFor(mass),
     };
@@ -694,19 +701,19 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   function relightInk(tint: RoomTint): void {
     for (const pair of meshes.values()) {
       (pair.ink.program.uniforms["uInk"] as { value: number[] }).value =
-        inkForWarmth(pair.warmth, tint);
+        inkForWarmth(pair.warmth, tint, pair.age);
     }
     for (const entry of crushing.values()) {
       (entry.meshes.ink.program.uniforms["uInk"] as { value: number[] }).value =
-        inkForWarmth(entry.meshes.warmth, tint);
+        inkForWarmth(entry.meshes.warmth, tint, entry.meshes.age);
     }
     for (const entry of fading.values()) {
       (entry.meshes.ink.program.uniforms["uInk"] as { value: number[] }).value =
-        inkForWarmth(entry.meshes.warmth, tint);
+        inkForWarmth(entry.meshes.warmth, tint, entry.meshes.age);
     }
     if (draft) {
       (draft.ink.program.uniforms["uInk"] as { value: number[] }).value =
-        inkForWarmth(draft.warmth, tint);
+        inkForWarmth(draft.warmth, tint, draft.age);
     }
   }
 

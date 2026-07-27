@@ -1808,3 +1808,108 @@ page, tilts organic, semantic tint legible on inspection (`marble` and `crimson`
 cooler, `amber` and `dusk` warmer) and invisible at a glance. Whether that is a
 composition worth hanging is the author's call, and it is the one thing in this
 phase that cannot be settled by measuring.
+
+---
+
+## Phase 3, second pass — legibility, and what counts as a word
+
+Three changes after the author used the room. Two were "make it more obvious";
+the third changes what the piece accepts, and contradicts two specification
+documents on purpose.
+
+### The tint was weak for a reason in the data, not the palette
+
+`marble` and `cedar` were supposed to read cool and warm. They read the same.
+
+The instinct is to reach for louder colours. The numbers say otherwise: the
+palette's endpoints were reached at warmth ±1.0, and across the 10,750 labelled
+words **58% score |warmth| < 0.3 and only 5% exceed 0.6**. Nearly every word
+rendered within a hair of neutral `#1A1817`, and `#152838` / `#3A2418` were
+decoration that nothing ever touched.
+
+So the fix is a gain of 2 on the score, putting the endpoints at ±0.5 —
+approximately the p10–p90 spread of the real distribution. **The declared
+colours did not change.** `marble` now renders `#2d3d49` and `cedar` `#4e3a2e`,
+which is legible at a glance without inventing anything.
+
+Worth generalising: when a mapping looks too subtle, check the distribution of
+what feeds it before touching the endpoints. A linear map across a range the
+data never occupies is not a subtle effect, it is an unused one.
+
+### `age` fades the ink as well as wearing the edge
+
+Edge erosion alone did not read — it is a one-pixel boundary difference you have
+to hunt for. Old writing fades, and fading changes a word's whole tone, so it
+survives being glanced at. Both now apply: faded *and* slightly eaten is what old
+ink on old paper looks like.
+
+Two bugs caught by printing the values rather than by looking:
+
+- Mapping age −1…+1 onto the fade meant a word of **neutral** age was already
+  15% washed out, so `inkForWarmth(0)` returned `#3b3836` instead of `#1A1817`.
+  That silently broke DESIGN.md's "a neutral word lands exactly on `INK`" and,
+  because most words sit near the middle, it lightened the entire room rather
+  than marking the old ones. Only positive age fades now.
+- 30% was too much at the top: `whence` washed out to `#545453`. At 22% it is
+  `#3f4040` — clearly older than its neighbours, still ink.
+
+The ink mixes toward the paper rather than lowering alpha, so a worn word does
+not go translucent over the words behind it.
+
+### The room now decides what is a word
+
+The largest change in the phase, and it overrides `DESIGN.md`'s "nonsense
+strings ... this is a feature" and narrows `CLAUDE.md`'s OOV rule.
+
+The author's argument: *a word that doesn't exist has no age, weight or
+bounciness.* That is the piece's own premise turned back on it — mass comes from
+meaning, so a string with no meaning has no business having mass. Phase 1c
+already had the evidence and had filed it as a curiosity: `asdf` scores **warmth
++0.66 and neutral mass**, which is not DESIGN.md's promised "light, drifty,
+unstable" but simply arbitrary. Nothing in those letters is readable, because a
+word's physical feel is semantic rather than orthographic — the same finding that
+killed the bidirectional GRU in Phase 1b.
+
+**Two sources, intersected, and each covers the other's failure.**
+
+A frequency list ranks `asdf`, `wasd` and `qwerty` *above* `gloaming`, because
+keyboard mashing is common on the web. Growing it makes this worse rather than
+better — measured, the top 250k admits `asdf` and `wasd` while still missing
+`brume`. A lexicon alone is 370k entries and 867 KB compressed, overwhelmingly
+obscure inflections.
+
+Requiring both:
+
+| | words | payload | evocative words | mashing admitted |
+| --- | --- | --- | --- | --- |
+| frequency top-60k | 57k | 110 KB | 12/20 | 1/14 |
+| frequency top-250k | 99k | 469 KB | 19/20 | **3/14** |
+| lexicon alone | 370k | **867 KB** | 19/20 | 0/14 |
+| **lexicon ∩ top-150k** | **78k** | **157 KB** | **16/20** | **0/14** |
+
+The model's vocabulary and `model/data/curated.txt` are unioned in
+unconditionally — every word the model was trained on must be committable, and
+the curated list carries the archaic words (`zounds`, `alack`) that Phase 6's
+ancient-words behaviour is built on and that no frequency list contains.
+
+**This does not retire the character branch, it scopes it.** The model knows
+10,749 words; the lexicon allows 77,843. The branch still scores ~67,000 words
+the model has never seen. It was doing two jobs and failing one; now it does one.
+
+Cost is 157 KB brotli on the desktop route, and the *perceived* cost is zero:
+typing was already gated on the 483 KB property model, and the lexicon loads
+alongside it. A failed lexicon fetch degrades to accepting anything — a room that
+refuses every word is broken in a way a briefly permissive one is not.
+
+### Refusal keeps the word
+
+The behaviour the author actually asked for, and the smallest change with the
+largest effect on how it feels. The buffer used to be cleared *before* the commit
+was attempted, so a refused word vanished and then the caret shook — which reads
+as the piece eating your typing, and leaves you retyping something you can no
+longer see. Now `onCommit` returns whether the room took the word, and the buffer
+survives a no. You can turn `asdfgh` into `ash` by backspacing.
+
+Letters are refused at the keystroke rather than at the commit, for the same
+reason: there is nothing to be gained by letting a digit appear and then refusing
+the whole word for containing it.

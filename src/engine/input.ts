@@ -17,8 +17,14 @@ import { MAX_WORD_LENGTH } from "../ml/properties";
 export interface WordInputCallbacks {
   /** Fires whenever the in-progress buffer changes, including when cleared. */
   onChange(buffer: string): void;
-  /** Fires when space or enter commits a non-empty buffer. */
-  onCommit(word: string): void;
+  /**
+   * Fires when space or enter commits a non-empty buffer.
+   *
+   * Returns whether the room took it. A refusal leaves the buffer **intact** so
+   * the visitor can fix the word rather than watching it vanish — which is what
+   * distinguishes "that is not a word" from "nothing happened".
+   */
+  onCommit(word: string): boolean;
   /**
    * Fires when the piece refuses an keystroke or a commit: past the length cap,
    * or backspace on an empty buffer. DESIGN.md answers all of these with the
@@ -30,6 +36,15 @@ export interface WordInputCallbacks {
 export interface WordInput {
   readonly detach: () => void;
 }
+
+/**
+ * What may be typed. Letters and nothing else.
+ *
+ * Deliberately not `\p{Letter}`: the model, the lexicon and the baked glyph
+ * outlines are all ASCII, so accepting `é` would produce a word that cannot be
+ * scored and cannot be drawn.
+ */
+const LETTER = /^[A-Za-z]$/;
 
 /**
  * Binds typing to a word buffer. Returns a handle that unbinds the listeners.
@@ -45,10 +60,17 @@ export function attachWordInput(
     // This is also what absorbs runs of consecutive spaces.
     if (buffer.length === 0) return;
 
-    const word = buffer;
+    // The buffer is cleared only once the room has actually taken the word.
+    // Clearing first and shaking afterwards — which is what this used to do —
+    // reads as the piece eating your typing, and leaves you retyping a word you
+    // cannot see to correct.
+    if (!callbacks.onCommit(buffer)) {
+      callbacks.onRejected();
+      return;
+    }
+
     buffer = "";
     callbacks.onChange(buffer);
-    callbacks.onCommit(word);
   }
 
   function backspace(): void {
@@ -95,6 +117,16 @@ export function attachWordInput(
     // Single-character keys are the printable ones; "Shift", "ArrowLeft" and
     // friends are all longer than one character.
     if (event.key.length === 1) {
+      // Letters only, refused at the *keystroke* rather than at the commit.
+      // Digits and punctuation cannot be part of a word this piece accepts, so
+      // there is nothing to be gained by letting one appear and then refusing
+      // the whole word for containing it — you would be watching something form
+      // that was never going to be allowed. This replaces DESIGN.md's
+      // punctuation-preserved-in-the-glyph rule; see the note there.
+      if (!LETTER.test(event.key)) {
+        callbacks.onRejected();
+        return;
+      }
       append(event.key);
     }
   }
