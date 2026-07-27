@@ -49,14 +49,32 @@ canvas {
 }
 
 /*
+ * The mono face: IBM Plex Mono, SIL OFL, subset to the ~75 characters the piece
+ * actually sets. 3.8 KB against a 173 KB source.
+ *
+ * A system stack was the placeholder here and would have been defensible — it
+ * is free and it never blocks. What decided against it is the *watermark*: an
+ * exported still is drawn on the visitor's machine, so a system stack means
+ * every image that leaves the piece carries a different typeface. The watermark
+ * is the one part of the identity that travels.
+ *
+ * `swap` rather than `block`, and the system stack stays as the fallback, so a
+ * slow font never delays the caption. The subset is regenerated with
+ * `pnpm bake:mono`; add a string to that script if new copy appears, or its
+ * characters will silently render in the fallback face.
+ */
+@font-face {
+  font-family: "Plex Mono";
+  src: url("/fonts/plex-mono-subset.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
  * The mobile fallback. Per DESIGN.md this is not a degraded piece, it is the
  * whole of the piece for that visitor: a still of a composition and one line
  * saying where to find the real thing. No dismiss, no back.
- *
- * The caption should be set in the mono face, which is still undecided — see
- * the Phase 3 item in ROADMAP.md. Until it is chosen this uses the system mono
- * stack, which is the right placeholder precisely because it is nobody's
- * choice and will look wrong enough to get replaced.
  */
 .fallback {
   margin: 0;
@@ -76,7 +94,7 @@ canvas {
 }
 
 .fallback figcaption {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: "Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 0.8125rem;
   line-height: 1.5;
   letter-spacing: 0.01em;

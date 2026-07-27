@@ -117,9 +117,18 @@ function resolveReference(from: string, reference: string): string {
  * it. Matching on the adjacent delimiter instead is the obvious shortcut and it
  * is wrong: the bundler emits template literals, so the character next to the
  * path is the backtick and every dynamic import reads as static.
+ *
+ * **`url(` is accepted unquoted, and that was a real miss.** A quote was
+ * originally required before the path, which is true of every reference in HTML
+ * and JS — but Vite minifies CSS to `url(/fonts/x.woff2)` with the quotes
+ * stripped, so the mono subset was invisible to this script while being
+ * genuinely downloaded by the mobile route. The failure mode is the dangerous
+ * direction: it under-reports, and these numbers are the ones the roadmap
+ * treats as a budget.
  */
 function referencesIn(from: string, source: string): Reference[] {
-  const PATH = /(import\s*\(\s*)?["'`]((?:\/|\.{1,2}\/)[\w./-]+\.\w+)/g;
+  const PATH =
+    /(import\s*\(\s*)?(?:["'`]|url\(\s*)((?:\/|\.{1,2}\/)[\w./-]+\.\w+)/g;
   const found = new Map<string, boolean>();
   for (const match of source.matchAll(PATH)) {
     const path = resolveReference(from, match[2]!);

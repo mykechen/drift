@@ -35,7 +35,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const FONT_PATH = resolve(ROOT, "public/fonts/Archivo.ttf");
+const FONT_PATH = resolve(ROOT, "fonts/Archivo.ttf");
 const OUTPUT_PATH = resolve(ROOT, "src/engine/glyph-outlines.bin");
 
 /**

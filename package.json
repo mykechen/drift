@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "measure": "node scripts/measure-payload.ts",
     "bake:glyphs": "node scripts/build-glyph-outlines.ts",
+    "bake:mono": "node scripts/build-mono-subset.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
