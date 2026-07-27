@@ -26,6 +26,7 @@ import {
 } from "./engine/physics";
 import { createRoomRenderer } from "./engine/renderer";
 import { axesForScores, NEUTRAL_AXES } from "./design/typography";
+import { roomTintAt, type RoomTint } from "./design/palette";
 import { loadPropertyModel, type PropertyModel } from "./ml/properties";
 import { NEUTRAL_SCORES } from "./ml/fallback";
 import { debug } from "./util/debug";
@@ -119,6 +120,28 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
     );
   });
 
+  /**
+   * The time-of-day tint, recomputed on a minute tick rather than per frame.
+   *
+   * The whole cycle moves 10° of hue over twenty-four hours, so per-frame
+   * sampling would be measuring floating-point noise — which is what
+   * DESIGN.md's "compute at frame boundary; do not re-sample per frame" is
+   * asking for. The renderer compares tint objects by identity to decide when
+   * to relight the room's ink, so handing back the *same* object between ticks
+   * is what makes that cheap.
+   */
+  let tint: RoomTint = roomTintAt(new Date());
+  let tintMinute = -1;
+  function currentTint(): RoomTint {
+    const now = new Date();
+    const minute = now.getHours() * 60 + now.getMinutes();
+    if (minute !== tintMinute) {
+      tintMinute = minute;
+      tint = roomTintAt(now);
+    }
+    return tint;
+  }
+
   const loop = createFrameLoop({
     physicsHz: (): number => room.physicsHz(),
     step(fixedDeltaMs): void {
@@ -134,6 +157,7 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
         room.roomHeight / 2,
         WORD_EM_UNITS,
         cursorX,
+        currentTint(),
       );
     },
   });

@@ -16,7 +16,9 @@ import {
   SHADOW_DROP_EM_HEAVIEST,
   SHADOW_DROP_EM_LIGHTEST,
   SHADOW_OPACITY,
+  type RoomTint,
 } from "../design/palette";
+import { createBackground } from "./background";
 import type { WordOutline, WordPath } from "./glyphs";
 import type { WordBody } from "./physics";
 import { createSdfBaker, SPREAD_EM, type SdfField } from "./sdf";
@@ -32,6 +34,8 @@ import { debug } from "../util/debug";
 interface WordMeshes {
   readonly ink: Mesh;
   readonly shadow: Mesh | null;
+  /** Kept so the ink can be rewritten when the time-of-day tint moves. */
+  readonly warmth: number;
 }
 
 /** Map a score in [-1, 1] onto a range. */
@@ -162,6 +166,7 @@ export interface RoomRenderer {
     roomHalfHeight: number,
     wordScale: number,
     cursorX: number,
+    tint: RoomTint,
   ) => void;
 }
 
@@ -178,21 +183,43 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   });
   const gl = renderer.gl;
 
-  const background = new Color(BACKGROUND);
-  gl.clearColor(background.r, background.g, background.b, 1);
+  // Only ever seen if the background pass fails to compile — the paper quad
+  // covers every pixel. Kept as the graceful fallback, and it is the declared
+  // value rather than the time-shifted one deliberately: a room that failed to
+  // draw its paper should look wrong in a recognisable way.
+  const clearColour = new Color(BACKGROUND);
+  gl.clearColor(clearColour.r, clearColour.g, clearColour.b, 1);
 
   const scene = new Transform();
 
   /**
-   * Two layers, so every shadow is drawn beneath every word rather than beneath
-   * only its own. With the depth buffer off, draw order *is* stacking order —
-   * one layer would let a word's shadow fall across the letters of a neighbour
-   * committed before it.
+   * The paper, then two word layers. The background is an *opaque* program and
+   * the words are transparent ones, and OGL draws all opaque meshes before any
+   * transparent one — so the paper is beneath everything regardless of the
+   * order these are parented in.
+   *
+   * The two word layers exist so every shadow is drawn beneath every word
+   * rather than beneath only its own. With the depth buffer off, draw order
+   * *is* stacking order — one layer would let a word's shadow fall across the
+   * letters of a neighbour committed before it.
    */
+  const background = createBackground(gl, scene);
   const shadowLayer = new Transform();
   const inkLayer = new Transform();
   shadowLayer.setParent(scene);
   inkLayer.setParent(scene);
+
+  /**
+   * The tint the ink uniforms were last written at.
+   *
+   * A word's ink is written once, when it is built — but the time-of-day shift
+   * moves the room's light under words that are already sitting there, so every
+   * word's ink has to be rewritten when it changes. Identity comparison is
+   * enough because `room.ts` builds one tint object per minute and hands the
+   * same one back on every frame in between; this rewrites 200 uniforms once a
+   * minute rather than every frame.
+   */
+  let currentTint: RoomTint | null = null;
 
   const shadow = new Color(SHADOW_COLOR);
   /** A word's two meshes: the ink, and the shadow it casts. */
@@ -361,14 +388,14 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     const inkMesh = buildMesh(path, emWidth, emHeight);
     if (!inkMesh) return null;
 
-    const tint = inkForWarmth(warmth);
-    (inkMesh.program.uniforms["uInk"] as { value: number[] }).value = tint;
+    (inkMesh.program.uniforms["uInk"] as { value: number[] }).value =
+      inkForWarmth(warmth, currentTint ?? undefined);
     inkMesh.setParent(inkLayer);
 
-    if (!castsShadow) return { ink: inkMesh, shadow: null };
+    if (!castsShadow) return { ink: inkMesh, shadow: null, warmth };
 
     const shadowMesh = buildMesh(path, emWidth, emHeight);
-    if (!shadowMesh) return { ink: inkMesh, shadow: null };
+    if (!shadowMesh) return { ink: inkMesh, shadow: null, warmth };
 
     const blurEm = acrossMass(
       mass,
@@ -388,7 +415,28 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       blurEm / (2 * SPREAD_EM);
 
     shadowMesh.setParent(shadowLayer);
-    return { ink: inkMesh, shadow: shadowMesh };
+    return { ink: inkMesh, shadow: shadowMesh, warmth };
+  }
+
+  /**
+   * Rewrite every word's ink for a new time of day.
+   *
+   * Words already in the room are lit by the same light as new ones — the shift
+   * is a property of the room, not of the moment a word was committed.
+   */
+  function relightInk(tint: RoomTint): void {
+    for (const pair of meshes.values()) {
+      (pair.ink.program.uniforms["uInk"] as { value: number[] }).value =
+        inkForWarmth(pair.warmth, tint);
+    }
+    for (const entry of crushing.values()) {
+      (entry.meshes.ink.program.uniforms["uInk"] as { value: number[] }).value =
+        inkForWarmth(entry.meshes.warmth, tint);
+    }
+    if (draft) {
+      (draft.ink.program.uniforms["uInk"] as { value: number[] }).value =
+        inkForWarmth(draft.warmth, tint);
+    }
   }
 
   /** How far below the word its shadow falls, in em. */
@@ -467,7 +515,14 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       roomHalfHeight: number,
       wordScale: number,
       cursorX: number,
+      tint: RoomTint,
     ): void {
+      background.draw(tint);
+      if (tint !== currentTint) {
+        currentTint = tint;
+        relightInk(tint);
+      }
+
       // How soft the ink edge should be, in field units, so that it covers
       // exactly one device pixel. The room half-height in world units maps to
       // half the drawing buffer, an em is `wordScale` world units, and the field
