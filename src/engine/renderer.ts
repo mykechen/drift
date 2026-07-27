@@ -275,10 +275,14 @@ export interface RoomRenderer {
    * Read: the word is being forgotten, not deleted. The crush is the violent
    * exit; this is the quiet one. A no-op if the id has no live mesh.
    *
-   * `delayMs` staggers the start, which is what `clear` uses to fade a whole
-   * room newest-last.
+   * `delayMs` staggers the start and `durationMs` sets the length, which is
+   * what the clear gesture uses to fade a whole room newest-last inside its own
+   * budget. Aging and clearing are the same animation at two different speeds —
+   * 2s when a single word is forgotten, faster when the whole room goes at
+   * once — so the duration has to travel with the call rather than being a
+   * constant here.
    */
-  readonly fade: (id: number, delayMs?: number) => void;
+  readonly fade: (id: number, delayMs?: number, durationMs?: number) => void;
   /**
    * Freeze or resume the caret's pulse.
    *
@@ -401,6 +405,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     {
       meshes: WordMeshes;
       startMs: number;
+      durationMs: number;
       x: number;
       y: number;
       rotation: number;
@@ -757,7 +762,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     crushing.set(id, { meshes: pair, startMs: performance.now() });
   }
 
-  function fade(id: number, delayMs = 0): void {
+  function fade(id: number, delayMs = 0, durationMs = AGE_FADE_MS): void {
     const pair = meshes.get(id);
     if (!pair) return;
     meshes.delete(id);
@@ -777,6 +782,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     fading.set(id, {
       meshes: pair,
       startMs: performance.now() + delayMs,
+      durationMs,
       x: translation[0] ?? 0,
       y: translation[1] ?? 0,
       rotation,
@@ -925,7 +931,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           // clear gesture read as a wave rather than as everything dimming at
           // once.
           const elapsed = now - entry.startMs;
-          const t = Math.max(0, elapsed / AGE_FADE_MS);
+          const t = Math.max(0, elapsed / entry.durationMs);
           if (t >= 1) {
             detach(entry.meshes);
             fading.delete(id);

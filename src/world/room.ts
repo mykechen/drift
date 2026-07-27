@@ -116,11 +116,11 @@ export function createRoom(
   }
 
   /** Retire one word: physics lets go, the renderer sees it out. */
-  function retire(id: number, delayMs = 0): void {
+  function retire(id: number, delayMs = 0, durationMs?: number): void {
     if (leaving.has(id)) return;
     leaving.add(id);
     physics.remove(id);
-    renderer.fade(id, delayMs);
+    renderer.fade(id, delayMs, durationMs);
   }
 
   function enforceSoftCap(): void {
@@ -159,7 +159,8 @@ export function createRoom(
       );
       // Copied before iterating: `retire` removes from the live array.
       const ids = physics.bodies.map((body) => body.id);
-      for (const [index, id] of ids.entries()) retire(id, index * stagger);
+      for (const [index, id] of ids.entries())
+        retire(id, index * stagger, CLEAR_FADE_MS);
       debug(
         "room",
         `clear: ${String(count)} words, ${stagger.toFixed(1)}ms apart`,
