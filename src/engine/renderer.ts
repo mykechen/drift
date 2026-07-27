@@ -329,6 +329,7 @@ export interface RoomRenderer {
     roomHalfHeight: number,
     wordScale: number,
     cursorX: number,
+    cursorY: number,
     tint: RoomTint,
   ) => void;
 }
@@ -873,6 +874,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       roomHalfHeight: number,
       wordScale: number,
       cursorX: number,
+      cursorY: number,
       tint: RoomTint,
     ): void {
       background.draw(tint);
@@ -1049,10 +1051,12 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       }
 
       if (draft) {
-        // The draft is centred on the cursor — which follows the mouse in x —
-        // rather than growing rightward from a caret, so it sits exactly where
-        // the committed body will spawn (DESIGN.md: words land at the cursor).
-        place(draft.ink, cursorX + shakeX, 0, 0, 0);
+        // The draft is centred on the cursor — which follows the mouse in both
+        // axes — rather than growing rightward from a caret, so it sits exactly
+        // where the committed body will spawn (DESIGN.md: words land at the
+        // cursor). `cursorY` arrives already lifted clear of the pile by the
+        // safe zone, so what is drawn is what will be dropped.
+        place(draft.ink, cursorX + shakeX, cursorY, 0, 0);
       }
 
       // The caret rides the *right edge* of the draft rather than sitting on
@@ -1080,7 +1084,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           draftWidthEm > 0 ? draftWidthEm / 2 + CURSOR_GAP_EM : 0;
         (uniforms["uTranslation"] as { value: number[] }).value = [
           cursorX + offsetEm * wordScale + shakeX,
-          0,
+          cursorY,
         ];
         (uniforms["uSize"] as { value: number[] }).value = [
           CURSOR_WIDTH_EM * wordScale,

@@ -246,6 +246,34 @@ const CRUSH_RADIUS_PER_MASS = 1.6;
 const SURFACE_SPAN_UNITS = 0.7;
 
 /**
+ * The safe zone: how much air a spawning word is given above whatever it is
+ * being set down on.
+ *
+ * DESIGN.md asks for "a small circular region around the text cursor where
+ * physics bodies cannot settle. Prevents new words from spawning inside an
+ * existing pile," and it went unimplemented while the cursor could only move in
+ * x — a visitor could always aim at empty floor. Placing in 2D removes that
+ * escape: aiming into a pile puts a compound body inside other compound bodies,
+ * and the solver's only answer is to eject one of them at speed.
+ *
+ * It is a *lift*, not a circle, and the difference is the design: x is the axis
+ * the visitor chose and it is kept exactly, while y is the axis the pile
+ * occupies and is the only one corrected.
+ */
+const SPAWN_CLEARANCE_UNITS = 0.12;
+
+/**
+ * How far below the ceiling the safe zone may lift a word.
+ *
+ * Above this the lift gives up and the word spawns into the pile anyway. That
+ * is the honest failure: it is the density ceiling Phase 3 already measured —
+ * past roughly 130 light words the pile reaches spawn height — and pushing a
+ * word out through the open top to avoid it would trade a visible problem for
+ * an invisible one.
+ */
+const SPAWN_CEILING_MARGIN_UNITS = 0.6;
+
+/**
  * How hard the focus nudge shoves a surface word, in units per second.
  *
  * Small enough that the pile gives rather than jumps — DESIGN.md says "a small
@@ -341,15 +369,32 @@ export interface PhysicsRoom {
   /** Rebuild the walls for a new aspect ratio. */
   setAspect(aspect: number): void;
   /**
-   * Drop a word into the room, centred horizontally on `spawnX` (world units,
-   * where the cursor is). Returns null if the word has no geometry.
+   * Drop a word into the room, centred on `spawnX`/`spawnY` (world units, where
+   * the cursor is). Returns null if the word has no geometry.
    */
   commit(
     word: string,
     geometry: WordGeometry,
     scores: PropertyScores,
     spawnX: number,
+    spawnY: number,
   ): WordBody | null;
+  /**
+   * A spawn height at `x` that does not put a word of this size inside the
+   * pile — the safe zone. Returns `preferredY` when the column is clear.
+   *
+   * Extents are in em, the units geometry is measured in; the room converts.
+   * Called once a frame with the draft's own size, so the caret rides up over
+   * the sediment as the pointer sweeps across it and the visitor sees where the
+   * word will actually land *before* committing it. A silent correction applied
+   * only at commit would read as the word teleporting.
+   */
+  safeSpawnY(
+    x: number,
+    halfWidthEm: number,
+    halfHeightEm: number,
+    preferredY: number,
+  ): number;
   /** Advance by one fixed step. */
   step(fixedDeltaMs: number): void;
   /**
@@ -402,6 +447,26 @@ function polygonArea(points: Float32Array): number {
       points[i * 2]! * points[j * 2 + 1]! - points[j * 2]! * points[i * 2 + 1]!;
   }
   return Math.abs(total) / 2;
+}
+
+/**
+ * Half-extents of a settled word's bounding box *after* its rotation, in world
+ * units.
+ *
+ * A word leans as it settles, and a leaning word is both taller and wider than
+ * the box its glyphs were measured in. Reading the unrotated extents would
+ * under-report the top of the pile by exactly the amount a tilted word sticks
+ * up, which is the amount the safe zone exists to clear.
+ */
+function rotatedHalfExtents(wordBody: WordBody): { x: number; y: number } {
+  const halfWidth = (wordBody.geometry.width / 2) * WORD_EM_UNITS;
+  const halfHeight = (wordBody.geometry.height / 2) * WORD_EM_UNITS;
+  const cos = Math.abs(Math.cos(wordBody.rotation));
+  const sin = Math.abs(Math.sin(wordBody.rotation));
+  return {
+    x: halfWidth * cos + halfHeight * sin,
+    y: halfWidth * sin + halfHeight * cos,
+  };
 }
 
 /**
@@ -592,11 +657,42 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       buildWalls();
     },
 
+    safeSpawnY(
+      x: number,
+      halfWidthEm: number,
+      halfHeightEm: number,
+      preferredY: number,
+    ): number {
+      const halfWidth = halfWidthEm * WORD_EM_UNITS;
+      const halfHeight = halfHeightEm * WORD_EM_UNITS;
+
+      // The top of whatever occupies this column. O(n) over at most 200 bodies,
+      // once a frame — the same order as the surface scan and just as cheap.
+      let pileTop = Number.NEGATIVE_INFINITY;
+      for (const other of bodies) {
+        const extent = rotatedHalfExtents(other);
+        if (Math.abs(other.x - x) > extent.x + halfWidth) continue;
+        pileTop = Math.max(pileTop, other.y + extent.y);
+      }
+      if (pileTop === Number.NEGATIVE_INFINITY) return preferredY;
+
+      const ceiling =
+        ROOM_HEIGHT_UNITS / 2 - halfHeight - SPAWN_CEILING_MARGIN_UNITS;
+      const lifted = pileTop + halfHeight + SPAWN_CLEARANCE_UNITS;
+      // Never *lower* than where the visitor aimed — the safe zone lifts a word
+      // out of the pile, it does not drag one down into it.
+      return Math.min(
+        Math.max(preferredY, lifted),
+        Math.max(preferredY, ceiling),
+      );
+    },
+
     commit(
       word: string,
       geometry: WordGeometry,
       scores: PropertyScores,
       spawnX: number,
+      spawnY: number,
     ): WordBody | null {
       if (geometry.hulls.length === 0) return null;
 
@@ -619,12 +715,12 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       const id = nextId;
       nextId += 1;
 
-      // Released at the cursor's x (DESIGN.md: words land where the cursor is),
+      // Released at the cursor (DESIGN.md: words land where the cursor is),
       // then nudged downward rather than dropped from rest. Free to rotate under
       // real physics; the righting torque in `step` settles it upright.
       const body = world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic()
-          .setTranslation(spawnX, 0)
+          .setTranslation(spawnX, spawnY)
           .setLinearDamping(damping)
           .setAngularDamping(ANGULAR_DAMPING)
           .setLinvel(0, COMMIT_IMPULSE_UNITS_PER_S),

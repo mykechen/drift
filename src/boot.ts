@@ -17,7 +17,11 @@
  */
 
 import { attachWordInput } from "./engine/input";
-import { loadGlyphSource, type GlyphSource } from "./engine/glyphs";
+import {
+  loadGlyphSource,
+  type GlyphSource,
+  type WordOutline,
+} from "./engine/glyphs";
 import { createFrameLoop } from "./engine/loop";
 import {
   createPhysicsRoom,
@@ -82,6 +86,7 @@ async function commitWord(
   physics: PhysicsRoom,
   raw: string,
   spawnX: number,
+  spawnY: number,
 ): Promise<void> {
   const prediction = model ? await model.predict(raw) : null;
   const scores = prediction?.scores ?? NEUTRAL_SCORES;
@@ -93,7 +98,7 @@ async function commitWord(
   const glyph = raw.toLowerCase();
 
   const geometry = glyphSource.geometryFor(glyph, axesForScores(scores));
-  const body = physics.commit(glyph, geometry, scores, spawnX);
+  const body = physics.commit(glyph, geometry, scores, spawnX, spawnY);
   if (!body) return;
 
   renderer.attach(body);
@@ -151,24 +156,68 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
   });
 
   /**
-   * The cursor's horizontal position in world units — where the next word forms
-   * and lands. It follows the mouse in x only, clamped so a word cannot spawn
+   * The cursor's position in world units — where the next word forms and lands.
+   *
+   * It follows the mouse in **both** axes, clamped so a word cannot form
    * half-off the frame. DESIGN.md's original centred, fixed cursor was changed
-   * here: placing words is how the room is composed and how the pile gets the
-   * horizontal spread it needs to settle.
+   * in Phase 2 to follow the mouse in x; this is the other half of that move.
+   * Placing words is how the room is composed, and a room composed only along a
+   * line is a shelf rather than a space. There is deliberately no vertical
+   * clamp beyond the frame: placing low is setting a word down rather than
+   * dropping it, which is a gesture worth having.
    */
   const CURSOR_EDGE_MARGIN_UNITS = 0.5;
   let cursorX = 0;
+  let cursorY = 0;
   window.addEventListener("mousemove", (event: MouseEvent): void => {
     const rect = canvas.getBoundingClientRect();
-    if (rect.width === 0) return;
-    const fraction = (event.clientX - rect.left) / rect.width;
-    const limit = Math.max(0, room.roomWidth / 2 - CURSOR_EDGE_MARGIN_UNITS);
+    if (rect.width === 0 || rect.height === 0) return;
+    const limitX = Math.max(0, room.roomWidth / 2 - CURSOR_EDGE_MARGIN_UNITS);
+    const limitY = Math.max(0, room.roomHeight / 2 - CURSOR_EDGE_MARGIN_UNITS);
+    const fractionX = (event.clientX - rect.left) / rect.width;
+    // Screen y grows downward and world y grows up, so this is a flip rather
+    // than the same expression twice.
+    const fractionY = (event.clientY - rect.top) / rect.height;
     cursorX = Math.max(
-      -limit,
-      Math.min(limit, (fraction - 0.5) * room.roomWidth),
+      -limitX,
+      Math.min(limitX, (fractionX - 0.5) * room.roomWidth),
+    );
+    cursorY = Math.max(
+      -limitY,
+      Math.min(limitY, (0.5 - fractionY) * room.roomHeight),
     );
   });
+
+  /**
+   * The word being typed, kept here as well as in the renderer because the safe
+   * zone needs to know how big it is.
+   */
+  let draftOutline: WordOutline | null = null;
+
+  /**
+   * The footprint the safe zone probes with when nothing is being typed, in em
+   * — roughly the caret's own box. Without it an empty buffer probes with a
+   * zero-width word and the caret dips into every gap between letters instead
+   * of riding the pile's surface.
+   */
+  const EMPTY_CARET_WIDTH_EM = 0.06;
+  const EMPTY_CARET_HEIGHT_EM = 0.72;
+
+  /**
+   * Where the next word is actually released: the cursor, lifted clear of
+   * whatever is already standing in that column.
+   *
+   * Recomputed once a frame rather than at commit, because the draft is drawn
+   * here too — the visitor watches the caret climb the sediment as the pointer
+   * sweeps across it, and then the word lands exactly where they were shown it
+   * would. A correction applied only at commit would read as teleporting.
+   */
+  let spawnY = 0;
+  function updateSpawn(): void {
+    const widthEm = draftOutline?.width ?? EMPTY_CARET_WIDTH_EM;
+    const heightEm = draftOutline?.height ?? EMPTY_CARET_HEIGHT_EM;
+    spawnY = room.safeSpawnY(cursorX, widthEm / 2, heightEm / 2, cursorY);
+  }
 
   const loop = createFrameLoop({
     physicsHz: (): number => room.physicsHz(),
@@ -184,12 +233,14 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       world.step();
     },
     render(): void {
+      updateSpawn();
       renderer.render(
         room.bodies,
         room.roomWidth / 2,
         room.roomHeight / 2,
         WORD_EM_UNITS,
         cursorX,
+        spawnY,
         world.tint(),
       );
     },
@@ -239,19 +290,34 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       // imply. Per DESIGN.md the model's opinion arrives *on commit* — that is the
       // moment the commit spring exists to dramatise, and pre-empting it would
       // spend the effect before the word is a body.
-      renderer.setDraft(
-        buffer.length === 0 ? null : glyphs.outlineFor(buffer, NEUTRAL_AXES),
-      );
+      draftOutline =
+        buffer.length === 0 ? null : glyphs.outlineFor(buffer, NEUTRAL_AXES);
+      renderer.setDraft(draftOutline);
+      // The word just changed size, so where it clears the pile has changed
+      // too. Without this the caret lags a frame behind the letter you typed.
+      updateSpawn();
     },
     onCommit(word): boolean {
       // Answered synchronously so the draft survives a refusal and shakes in
       // place. Only once the room has said yes is the draft cleared and the
       // word handed to inference.
       if (!canCommit(lexicon, word)) return false;
+      // Read before the draft is cleared: this is the height the visitor was
+      // just shown, computed against the word they actually typed.
+      const releaseY = spawnY;
       // Cleared here rather than after inference resolves, so the draft does not
       // linger for a frame on top of the body that replaces it.
+      draftOutline = null;
       renderer.setDraft(null);
-      void commitWord(renderer, properties, glyphs, room, word, cursorX);
+      void commitWord(
+        renderer,
+        properties,
+        glyphs,
+        room,
+        word,
+        cursorX,
+        releaseY,
+      );
       return true;
     },
     onRejected(): void {
@@ -277,8 +343,8 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       lexicon,
       properties,
       renderer,
-      commit: (word: string, spawnX = cursorX) =>
-        commitWord(renderer, properties, glyphs, room, word, spawnX),
+      commit: (word: string, spawnX = cursorX, spawn = spawnY) =>
+        commitWord(renderer, properties, glyphs, room, word, spawnX, spawn),
     };
   }
 }
