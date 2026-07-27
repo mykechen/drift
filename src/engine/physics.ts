@@ -245,6 +245,60 @@ const CRUSH_RADIUS_PER_MASS = 1.6;
  */
 const SURFACE_SPAN_UNITS = 0.7;
 
+// --- Grab and throw ---------------------------------------------------------
+
+/**
+ * How far from a word the pointer may be and still take hold of it, in world
+ * units.
+ *
+ * A radius, because a *containment* test is the obvious choice and it is wrong
+ * here. A glyph is mostly counters and gaps between letters, so clicking the
+ * middle of an `o`, or the space between `t` and `h`, would miss — and a piece
+ * with no UI and no hover state gives the visitor nothing to correct against.
+ * Rapier's `projectPoint` returns the nearest point on the nearest shape, which
+ * turns "did I hit it" into "how close was I", and that is the question worth
+ * asking.
+ */
+const GRAB_RADIUS_UNITS = 0.35;
+
+/**
+ * The spring pulling a held word toward the pointer, across the mass range.
+ *
+ * **This gap is the whole design of the gesture.** The impulse is scaled by the
+ * body's mass, which makes it an *acceleration* drive — so a uniform gain would
+ * move every word identically and throw away the one property the piece exists
+ * to express. Driving the gain from the mass *score* instead means a feather
+ * whips around the pointer and a boulder heaves and lags behind it. The model is
+ * felt through the hand.
+ *
+ * **The ratio has to be large, and the reason is arithmetic.** A damped spring
+ * following the pointer at a steady speed settles at a lag of `2ζv/√k`, so felt
+ * weight goes as the *square root* of this gap, not the gap itself. The first
+ * values tried were 900 and 260 — a 3.5:1 ratio, which measured 1.8:1 of actual
+ * lag and read as almost nothing. 9:1 here buys the ~3:1 that can be felt.
+ *
+ * The heavy end still lifts easily: holding against gravity at `k = 130` needs
+ * the spring stretched 0.07 units, which is a tenth of a word's height.
+ */
+const GRAB_STIFFNESS_AT_LIGHTEST = 1200;
+const GRAB_STIFFNESS_AT_HEAVIEST = 130;
+
+/**
+ * Slightly under critical damping, so a held word has a little life in the hand
+ * rather than tracking the pointer like a rigid cursor.
+ */
+const GRAB_DAMPING_RATIO = 0.85;
+
+/**
+ * How far the spring may be stretched before the pull stops growing, in world
+ * units.
+ *
+ * A flick of the pointer can move it most of the room's width between two
+ * steps. Without a cap that is an unbounded force, and the word leaves at a
+ * speed that tunnels through a wall rather than being thrown at it.
+ */
+const GRAB_MAX_PULL_UNITS = 1.5;
+
 /**
  * The safe zone: how much air a spawning word is given above whatever it is
  * being set down on.
@@ -420,6 +474,29 @@ export interface PhysicsRoom {
    */
   surfaceBodies(limit: number): WordBody[];
   /**
+   * Take hold of whatever word is under a world point, within reach. Returns
+   * the word taken, or null if the pointer was over bare paper.
+   *
+   * A frozen word is woken, and so is the sediment around it — pulling a word
+   * out of a pile should let the pile collapse into the space, the same way the
+   * crush already does.
+   */
+  grab(x: number, y: number): WordBody | null;
+  /** Where the held word is being pulled to. A no-op if nothing is held. */
+  dragTo(x: number, y: number): void;
+  /**
+   * Let go.
+   *
+   * The body simply keeps whatever velocity it earned under the spring. There
+   * is deliberately no captured pointer trail and no injected throw velocity: a
+   * heavy word lagged behind the pointer while it was held, so it also leaves
+   * the hand slower. **The lag is the weight**, and replacing it with the
+   * pointer's own speed would flatten the one distinction the piece is about.
+   */
+  release(): void;
+  /** The word currently held, if any. */
+  readonly held: WordBody | null;
+  /**
    * Wake one word and give it a small shove, so the pile visibly gives.
    *
    * Waking alone is not enough and that is worth stating: a settled word is in
@@ -523,6 +600,23 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
   let elapsedMs = 0;
   /** Ids of words crushed this step, handed to the renderer to animate out. */
   let crushedIds: number[] = [];
+  /**
+   * The word in the visitor's hand.
+   *
+   * `localPoint` is where they took hold of it, in the body's *own* frame, so
+   * the grip stays put on the letterform as the word turns. That is what lets a
+   * word held by one corner hang and swing from it rather than sliding rigidly
+   * under the pointer.
+   */
+  let grabbed: {
+    readonly body: WordBody;
+    readonly localX: number;
+    readonly localY: number;
+    readonly stiffness: number;
+    readonly damping: number;
+    targetX: number;
+    targetY: number;
+  } | null = null;
 
   let roomWidth = ROOM_HEIGHT_UNITS * aspect;
   let walls: RAPIER.RigidBody | null = null;
@@ -594,6 +688,11 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
 
   /** Drop a word from the world entirely — its body, colliders, and bookkeeping. */
   function removeWord(wordBody: WordBody): void {
+    // The hand can outlive the word: a held word may still age out under the
+    // soft cap. Leaving the grab pointed at a removed body would drive impulses
+    // into a handle that no longer resolves, every step, until the mouse is
+    // released.
+    if (grabbed?.body === wordBody) grabbed = null;
     const body = handles.get(wordBody.id);
     if (body) world.removeRigidBody(body);
     handles.delete(wordBody.id);
@@ -620,10 +719,71 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       CRUSH_RADIUS_BASE + striker.scores.mass * CRUSH_RADIUS_PER_MASS;
     for (const target of bodies) {
       if (target === striker || toCrush.has(target)) continue;
+      // A word in the visitor's hand is not crushed. Having something
+      // destroyed while you are holding it reads as the piece taking it away
+      // from you, and the hand is the one place the visitor is in charge.
+      if (isHeld(target)) continue;
       if (striker.scores.mass - target.scores.mass <= CRUSH_MASS_GAP) continue;
       if (Math.hypot(target.x - striker.x, target.y - striker.y) <= radius)
         toCrush.add(target);
     }
+  }
+
+  /** Whether a word is currently in the visitor's hand. */
+  function isHeld(wordBody: WordBody): boolean {
+    return grabbed?.body === wordBody;
+  }
+
+  /**
+   * Pull the held word's grip toward the pointer, applying the force *at the
+   * grip* so the word swings from it.
+   *
+   * Run before `world.step` rather than after, so the impulse is resolved by the
+   * same step that sees it — a force applied after the solver has run is a force
+   * the visitor feels one frame late.
+   */
+  function driveGrab(fixedDeltaMs: number): void {
+    if (!grabbed) return;
+    const body = handles.get(grabbed.body.id);
+    if (!body) return;
+
+    // Where the grip has ended up in the world, given how the word has turned
+    // since it was taken hold of.
+    const translation = body.translation();
+    const angle = body.rotation();
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const gripX = translation.x + grabbed.localX * cos - grabbed.localY * sin;
+    const gripY = translation.y + grabbed.localX * sin + grabbed.localY * cos;
+
+    let pullX = grabbed.targetX - gripX;
+    let pullY = grabbed.targetY - gripY;
+    const reach = Math.hypot(pullX, pullY);
+    if (reach > GRAB_MAX_PULL_UNITS) {
+      pullX = (pullX / reach) * GRAB_MAX_PULL_UNITS;
+      pullY = (pullY / reach) * GRAB_MAX_PULL_UNITS;
+    }
+
+    // The grip's own velocity, which is the body's plus whatever the rotation
+    // contributes at that distance from the centre of mass. Damping against the
+    // *body's* velocity instead would leave a word held by a corner free to
+    // spin, because the spin is invisible at the centre.
+    const centre = body.worldCom();
+    const armX = gripX - centre.x;
+    const armY = gripY - centre.y;
+    const linear = body.linvel();
+    const spin = body.angvel();
+    const gripVelX = linear.x - spin * armY;
+    const gripVelY = linear.y + spin * armX;
+
+    const accelX = grabbed.stiffness * pullX - grabbed.damping * gripVelX;
+    const accelY = grabbed.stiffness * pullY - grabbed.damping * gripVelY;
+    const scale = body.mass() * (fixedDeltaMs / 1000);
+    body.applyImpulseAtPoint(
+      { x: accelX * scale, y: accelY * scale },
+      { x: gripX, y: gripY },
+      true,
+    );
   }
 
   /**
@@ -818,6 +978,10 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
         }
       }
 
+      // Before the solver runs, so the pull is resolved by the same step that
+      // sees it rather than landing a frame late in the visitor's hand.
+      driveGrab(fixedDeltaMs);
+
       world.step(eventQueue);
 
       // Crush is decided from collision events — any contact, since a heavy word
@@ -855,6 +1019,15 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
         wordBody.asleep = body.isSleeping() || wordBody.frozen;
 
         if (wordBody.frozen) continue;
+
+        // A held word answers to the hand and to nothing else. The righting
+        // torque would fight the visitor for control of its angle, and the
+        // freeze timer would turn it to stone while they were still holding it
+        // steady.
+        if (isHeld(wordBody)) {
+          stillForMs.set(wordBody.id, 0);
+          continue;
+        }
 
         const velocity = body.linvel();
         const linSpeed = Math.hypot(velocity.x, velocity.y);
@@ -948,6 +1121,83 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       return surface.slice(0, limit);
     },
 
+    get held(): WordBody | null {
+      return grabbed?.body ?? null;
+    },
+
+    grab(x: number, y: number): WordBody | null {
+      // The walls are excluded rather than filtered afterwards: `projectPoint`
+      // returns only the *nearest* collider, so a visitor reaching for a word
+      // sitting against the floor would otherwise be handed the floor.
+      const projection = world.projectPoint(
+        { x, y },
+        true,
+        undefined,
+        undefined,
+        undefined,
+        walls ?? undefined,
+      );
+      if (!projection) return null;
+
+      const wordBody = bodyByCollider.get(projection.collider.handle);
+      if (!wordBody) return null;
+      const reach = Math.hypot(projection.point.x - x, projection.point.y - y);
+      if (!projection.isInside && reach > GRAB_RADIUS_UNITS) return null;
+
+      if (wordBody.frozen) wakeBody(wordBody);
+      // Taking a word out of sediment should let the sediment fall into the
+      // space it leaves, exactly as the crush does.
+      wakeAround(wordBody.x, wordBody.y);
+
+      const body = handles.get(wordBody.id);
+      if (!body) return null;
+
+      // The grip is the nearest point *on* the word, not the pointer itself. A
+      // forgiving radius means the pointer is often outside the shape, and
+      // hanging the word off a point in mid-air beside it gives the grab a long
+      // lever arm and a wild swing.
+      const translation = body.translation();
+      const angle = body.rotation();
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const offsetX = projection.point.x - translation.x;
+      const offsetY = projection.point.y - translation.y;
+
+      const stiffness = lerp(
+        wordBody.scores.mass,
+        GRAB_STIFFNESS_AT_LIGHTEST,
+        GRAB_STIFFNESS_AT_HEAVIEST,
+      );
+
+      grabbed = {
+        body: wordBody,
+        // Inverse rotation, so the grip is stored in the word's own frame and
+        // travels with the letterform as it turns.
+        localX: offsetX * cos + offsetY * sin,
+        localY: -offsetX * sin + offsetY * cos,
+        stiffness,
+        damping: 2 * GRAB_DAMPING_RATIO * Math.sqrt(stiffness),
+        targetX: x,
+        targetY: y,
+      };
+      debug(
+        "physics",
+        `grabbed "${wordBody.word}" mass ${wordBody.scores.mass.toFixed(2)} ` +
+          `stiffness ${stiffness.toFixed(0)}`,
+      );
+      return wordBody;
+    },
+
+    dragTo(x: number, y: number): void {
+      if (!grabbed) return;
+      grabbed.targetX = x;
+      grabbed.targetY = y;
+    },
+
+    release(): void {
+      grabbed = null;
+    },
+
     stir(id: number): void {
       const wordBody = bodies.find((candidate) => candidate.id === id);
       if (!wordBody) return;
@@ -975,6 +1225,7 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
     },
 
     clear(): void {
+      grabbed = null;
       for (const body of handles.values()) world.removeRigidBody(body);
       handles.clear();
       bodyByCollider.clear();

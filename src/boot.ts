@@ -169,23 +169,55 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
   const CURSOR_EDGE_MARGIN_UNITS = 0.5;
   let cursorX = 0;
   let cursorY = 0;
-  window.addEventListener("mousemove", (event: MouseEvent): void => {
+
+  /**
+   * Where the pointer is in the world, *unclamped*.
+   *
+   * The caret is clamped away from the frame's edge so a word cannot form
+   * half-off it, but the hand must not be: dragging a word into a corner is a
+   * legitimate thing to want, and a clamped grab target would stop short of the
+   * wall and quietly refuse to put it there.
+   */
+  function pointerWorld(event: MouseEvent): { x: number; y: number } | null {
     const rect = canvas.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
+    if (rect.width === 0 || rect.height === 0) return null;
+    return {
+      x: ((event.clientX - rect.left) / rect.width - 0.5) * room.roomWidth,
+      // Screen y grows downward and world y grows up, so this is a flip rather
+      // than the same expression twice.
+      y: (0.5 - (event.clientY - rect.top) / rect.height) * room.roomHeight,
+    };
+  }
+
+  window.addEventListener("mousemove", (event: MouseEvent): void => {
+    const point = pointerWorld(event);
+    if (!point) return;
     const limitX = Math.max(0, room.roomWidth / 2 - CURSOR_EDGE_MARGIN_UNITS);
     const limitY = Math.max(0, room.roomHeight / 2 - CURSOR_EDGE_MARGIN_UNITS);
-    const fractionX = (event.clientX - rect.left) / rect.width;
-    // Screen y grows downward and world y grows up, so this is a flip rather
-    // than the same expression twice.
-    const fractionY = (event.clientY - rect.top) / rect.height;
-    cursorX = Math.max(
-      -limitX,
-      Math.min(limitX, (fractionX - 0.5) * room.roomWidth),
-    );
-    cursorY = Math.max(
-      -limitY,
-      Math.min(limitY, (0.5 - fractionY) * room.roomHeight),
-    );
+    cursorX = Math.max(-limitX, Math.min(limitX, point.x));
+    cursorY = Math.max(-limitY, Math.min(limitY, point.y));
+    room.dragTo(point.x, point.y);
+  });
+
+  // Grab and throw. The one verb the room was missing: the pointer aimed where
+  // the next word would land and could do nothing to the words already there.
+  canvas.addEventListener("mousedown", (event: MouseEvent): void => {
+    if (event.button !== 0) return;
+    const point = pointerWorld(event);
+    if (!point) return;
+    // Only once something is actually taken hold of, so a click on bare paper
+    // still behaves like a click on a page.
+    if (room.grab(point.x, point.y)) event.preventDefault();
+  });
+
+  // On the window rather than the canvas, and on blur as well: releasing the
+  // button outside the frame, or tabbing away mid-drag, must not leave a word
+  // stuck to a pointer that is no longer reporting where it is.
+  window.addEventListener("mouseup", (): void => {
+    room.release();
+  });
+  window.addEventListener("blur", (): void => {
+    room.release();
   });
 
   /**
