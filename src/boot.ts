@@ -146,6 +146,9 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
     physicsHz: (): number => room.physicsHz(),
     step(fixedDeltaMs): void {
       room.step(fixedDeltaMs);
+      // Commit springs advance on the same fixed timestep as the simulation, so
+      // a word arrives identically on a 60Hz laptop and a 144Hz monitor.
+      renderer.step(fixedDeltaMs);
       // Words crushed this step have already lost their bodies; hand them to the
       // renderer to press flat and fade where they sat.
       for (const id of room.drainCrushed()) renderer.crush(id);

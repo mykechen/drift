@@ -20,6 +20,13 @@ import {
   type RoomTint,
 } from "../design/palette";
 import { createBackground } from "./background";
+import {
+  COMMIT_SPRING,
+  createSpring,
+  springAtRest,
+  stepSpring,
+  type Spring,
+} from "../design/motion";
 import type { WordOutline, WordPath } from "./glyphs";
 import type { WordBody } from "./physics";
 import { createSdfBaker, SPREAD_EM, type SdfField } from "./sdf";
@@ -37,6 +44,13 @@ interface WordMeshes {
   readonly shadow: Mesh | null;
   /** Kept so the ink can be rewritten when the time-of-day tint moves. */
   readonly warmth: number;
+  /**
+   * Where the shadow's blur and drop end up. The commit spring grows both from
+   * nothing, so the settled values have to be remembered rather than written
+   * once at build time.
+   */
+  readonly blurTarget: number;
+  readonly dropTarget: number;
 }
 
 /** Map a score in [-1, 1] onto a range. */
@@ -54,6 +68,30 @@ const MAX_DEVICE_PIXEL_RATIO = 2;
 
 /** How long a crushed word takes to press flat and fade. */
 const CRUSH_FADE_MS = 320;
+
+/**
+ * What the commit spring drives, and what it deliberately does not.
+ *
+ * DESIGN.md springs `wght` and `wdth` from neutral to the model's values. That
+ * is not what happens, and the reason is in
+ * `docs/specs/2026-07-27-phase-3-room-design.md`: geometry is cached at a
+ * 5-unit axis quantum, so such a spring passes through ~11 distinct axis pairs,
+ * each needing its own SDF bake (4.7ms) and its own texture (~15KB) that is
+ * never read again. Eleven dropped frames and 33MB of dead textures across a
+ * full room, for 180ms of animation.
+ *
+ * So the geometry is built once at the *target* axes — the axis mapping, which
+ * is the load-bearing "the word IS the body" move, is untouched — and the
+ * spring drives uniforms only. `uScale` gives the arrival its snap, and the
+ * shadow's blur and drop grow in from nothing, which DESIGN.md's commit
+ * sequence already asks for in as many words: "shadow appears and blurs to its
+ * target radius."
+ *
+ * ROADMAP.md already forbids rebuilding colliders during the spring. This is
+ * the same argument applied to the distance field.
+ */
+const COMMIT_SCALE_FROM = 0.92;
+const COMMIT_SCALE_TO = 1;
 
 /**
  * A word is one quad carrying its own distance field.
@@ -209,6 +247,14 @@ export interface RoomRenderer {
    * to solid on blur would draw the eye to the window you just left.
    */
   readonly setPulsePaused: (paused: boolean) => void;
+  /**
+   * Advance the commit springs by one fixed timestep.
+   *
+   * Called from the loop's `step`, not from `render`, so a spring settles the
+   * same way regardless of display refresh rate — the same reason the physics
+   * runs on a fixed timestep.
+   */
+  readonly step: (fixedDeltaMs: number) => void;
   /** Drop every mesh, committed and draft. */
   readonly detachAll: () => void;
   /** Re-reads the canvas's CSS size and resizes the drawing buffer to match. */
@@ -295,6 +341,11 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   const meshes = new Map<number, WordMeshes>();
   /** Words being crushed out of existence: meshes + when the animation started. */
   const crushing = new Map<number, { meshes: WordMeshes; startMs: number }>();
+  /**
+   * Words still arriving. Retired the moment their spring settles — a full room
+   * must not be stepping two hundred springs that have all stopped moving.
+   */
+  const committing = new Map<number, Spring>();
   /** The word being typed. One at a time, replaced wholesale on each keystroke. */
   let draft: WordMeshes | null = null;
   /**
@@ -501,10 +552,17 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       inkForWarmth(warmth, currentTint ?? undefined);
     inkMesh.setParent(inkLayer);
 
-    if (!castsShadow) return { ink: inkMesh, shadow: null, warmth };
+    const bare = {
+      ink: inkMesh,
+      shadow: null,
+      warmth,
+      blurTarget: 0,
+      dropTarget: 0,
+    };
+    if (!castsShadow) return bare;
 
     const shadowMesh = buildMesh(path, emWidth, emHeight);
-    if (!shadowMesh) return { ink: inkMesh, shadow: null, warmth };
+    if (!shadowMesh) return bare;
 
     const blurEm = acrossMass(
       mass,
@@ -519,12 +577,20 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     ];
     (shadowUniforms["uAlpha"] as { value: number }).value = SHADOW_OPACITY;
     // The field spans 2×SPREAD_EM across its full range, so an em converts to
-    // field units by dividing by that.
-    (shadowUniforms["uBlur"] as { value: number }).value =
-      blurEm / (2 * SPREAD_EM);
+    // field units by dividing by that. Written per frame while the commit
+    // spring runs, so it starts at zero — a shadow that appeared at full radius
+    // would arrive before the word had finished landing.
+    const blurTarget = blurEm / (2 * SPREAD_EM);
+    (shadowUniforms["uBlur"] as { value: number }).value = 0;
 
     shadowMesh.setParent(shadowLayer);
-    return { ink: inkMesh, shadow: shadowMesh, warmth };
+    return {
+      ink: inkMesh,
+      shadow: shadowMesh,
+      warmth,
+      blurTarget,
+      dropTarget: shadowDropFor(mass),
+    };
   }
 
   /**
@@ -570,6 +636,10 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     );
     if (!pair) return;
     meshes.set(body.id, pair);
+    committing.set(
+      body.id,
+      createSpring(COMMIT_SPRING, COMMIT_SCALE_FROM, COMMIT_SCALE_TO),
+    );
   }
 
   function setDraft(outline: WordOutline | null): void {
@@ -592,15 +662,28 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     const pair = meshes.get(id);
     if (!pair) return;
     meshes.delete(id);
+    // A word crushed mid-arrival stops arriving. Without this its spring keeps
+    // stepping against a mesh the crush animation now owns, and the two fight
+    // over `uScale`.
+    committing.delete(id);
     // The meshes keep the transform the last frame gave them, so the word
     // presses flat exactly where it was sitting. performance.now is fine here —
     // this is wall-clock exit polish, not simulation.
     crushing.set(id, { meshes: pair, startMs: performance.now() });
   }
 
+  function step(fixedDeltaMs: number): void {
+    if (committing.size === 0) return;
+    for (const [id, spring] of committing) {
+      stepSpring(spring, fixedDeltaMs);
+      if (springAtRest(spring)) committing.delete(id);
+    }
+  }
+
   function detachAll(): void {
     for (const pair of meshes.values()) detach(pair);
     meshes.clear();
+    committing.clear();
     for (const entry of crushing.values()) detach(entry.meshes);
     crushing.clear();
     setDraft(null);
@@ -620,6 +703,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     attach,
     setDraft,
     crush,
+    step,
     setPulsePaused(paused: boolean): void {
       // Resample the clock on resume so the time spent paused is not counted as
       // pulse phase; without this the caret jumps to wherever the sine would
@@ -665,6 +749,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
         y: number,
         rotation: number,
         drop: number,
+        scaleMultiplier = 1,
       ): void {
         const uniforms = mesh.program.uniforms;
         (uniforms["uTranslation"] as { value: number[] }).value = [
@@ -672,7 +757,8 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           y - drop * wordScale,
         ];
         (uniforms["uRotation"] as { value: number }).value = rotation;
-        (uniforms["uScale"] as { value: number }).value = wordScale;
+        (uniforms["uScale"] as { value: number }).value =
+          wordScale * scaleMultiplier;
         (uniforms["uEdgeSoftness"] as { value: number }).value = edgeSoftness;
         (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
           roomHalfWidth,
@@ -683,15 +769,32 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       for (const body of bodies) {
         const pair = meshes.get(body.id);
         if (!pair) continue;
-        place(pair.ink, body.x, body.y, body.rotation, 0);
+
+        // The commit spring, if this word is still arriving. `arrival` runs 0 →
+        // 1 as the spring travels, overshooting a little past 1 — which is the
+        // point of it. A settled word has no spring and takes the plain path.
+        const spring = committing.get(body.id);
+        const scale = spring ? spring.value : COMMIT_SCALE_TO;
+        const arrival = spring
+          ? (spring.value - COMMIT_SCALE_FROM) /
+            (COMMIT_SCALE_TO - COMMIT_SCALE_FROM)
+          : 1;
+
+        place(pair.ink, body.x, body.y, body.rotation, 0, scale);
         if (pair.shadow) {
           place(
             pair.shadow,
             body.x,
             body.y,
             body.rotation,
-            shadowDropFor(body.scores.mass),
+            pair.dropTarget * arrival,
+            scale,
           );
+          // Written unconditionally rather than only while a spring exists, so
+          // the frame after one retires lands exactly on the target instead of
+          // keeping whatever the last spring step left behind.
+          (pair.shadow.program.uniforms["uBlur"] as { value: number }).value =
+            pair.blurTarget * arrival;
         }
       }
 
