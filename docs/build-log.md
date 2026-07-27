@@ -2115,3 +2115,90 @@ Nothing regressed. Feel test 1 measures **895ms / 2420ms** against a baseline of
 can now produce — 200 never-freezing light words, all breathing, 6,992 colliders,
 nothing frozen and nothing asleep — steps at **2.7ms p50 / 3.3ms max against
 16.7ms**, through the throttled driver.
+
+---
+
+## Phase 5a — the free embedding does not exist, and knowing that cost an hour
+
+Semantic gravity needs a notion of "these two words are related". The cheapest
+possible answer would be that the property model already contains one: it has a
+48-unit word embedding and a 128-unit penultimate layer, both of which ship
+already, so semantic gravity would cost **zero extra bytes** against a model
+that is already 483 KB.
+
+`model/embedding_probe.py` runs offline against the existing checkpoint. It was
+run *before* designing any of Phase 5a, because the answer changes what 5b has
+to build.
+
+**The prior was written down before the numbers were looked at**, so the result
+could not be rationalised afterwards: every one of these representations is
+supervised only through six physical scores, so by the data-processing
+inequality none of them can carry more about a word than those six numbers do.
+The prediction was that they would cluster words that *behave* alike rather than
+words that *mean* alike.
+
+| representation | related | opposed | random | sep | MRR | hit@10 |
+| --- | --- | --- | --- | --- | --- | --- |
+| word-embed (48) | 0.007 | 0.040 | −0.001 | 0.008 | 0.001 | **0%** |
+| penultimate (128) | 0.383 | −0.075 | 0.044 | 0.339 | 0.059 | **10%** |
+| scores (6) | 0.873 | −0.864 | 0.085 | **0.788** | 0.050 | **10%** |
+
+### The aggregate numbers say yes and they are wrong
+
+Look at `scores (6)`: related pairs at 0.873, antonyms at −0.864, a separation
+of 0.788. On those three columns alone this is an *excellent* embedding, and a
+less careful experiment would have stopped there and shipped it.
+
+The nearest neighbours are unambiguous:
+
+```
+stone   ->  thousand, dr, gate, means, solid, bridge
+ocean   ->  permanent, laws, mount, subject, court, scotland
+iron    ->  scale, toronto, classes, guard, senate, streets
+forest  ->  landscape, philosophy, long, settlement, lessons, grounds
+```
+
+**Why both things are true at once is the whole finding.** Related words really
+do sit close together — `stone` and `rock` are both heavy, old and inert, so
+their property vectors nearly coincide. But six numbers describe a very small
+space, and several hundred unrelated words share any given profile. `stone` and
+`thousand` are neighbours because both score mid-heavy, neutral and old-ish.
+High similarity on curated pairs is not the same as *ranking*, and semantic
+gravity picks neighbours by ranking. MRR 0.05 and hit@10 of 10% are the numbers
+that matter, and they say the true partner is essentially never the nearest
+thing.
+
+The antonym column is the same illusion in reverse. −0.864 looks like the model
+understands opposition; it is measuring that `hot` and `cold` sit at opposite
+ends of the warmth axis *by construction*. Nothing semantic is happening.
+
+**Lesson for the writeup:** pick the metric that matches how the artefact will
+be *used* before running the experiment. Separation on a curated pair list is
+the metric that flatters; rank against the full candidate pool is the metric the
+mechanic actually consumes, and the two disagreed by enough to reverse the
+decision.
+
+### Two details worth keeping
+
+**The 48-unit word embedding is pure noise** — MRR 0.001, hit@10 of 0%, and
+neighbours with no discernible pattern. Nothing in training constrains it beyond
+producing the right six outputs through a 256-unit MLP, so it is free to be
+arbitrary and it is. Only what survives to the output means anything.
+
+**There is exactly one genuine signal in the whole probe**, and it is worth
+naming because it shows what the representation *does* encode: from the
+penultimate layer, `silence` → `alone, quiet, dead, still, nothing, tired`. That
+is a good list. It is also entirely the intensity and warmth axes doing the work
+— quiet cold things — rather than anything semantic.
+
+### What this changes
+
+Phase 5a's baseline is "cosine similarity in embedding space", and there is now
+no free embedding space to compute it in. So **5a cannot start with the physics;
+it has to start with a payload decision**, which is the opposite of the order
+the roadmap assumed. Real embeddings for the 10,749-word vocabulary are the
+honest option and they are not cheap — a 50-dimensional int8 table is roughly
+537 KB raw, against a 3.3 MB cold desktop budget that Phase 2.5 fought to hold.
+
+That is a scope-and-payload question for the author, not an implementation
+detail, so it goes back rather than being resolved here.
