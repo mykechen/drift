@@ -13,7 +13,7 @@
  */
 
 export type DebugNamespace =
-  "audio" | "input" | "loop" | "ml" | "physics" | "render";
+  "audio" | "input" | "loop" | "ml" | "physics" | "render" | "room";
 
 type DebugFn = (namespace: DebugNamespace, ...args: readonly unknown[]) => void;
 

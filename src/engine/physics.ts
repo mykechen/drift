@@ -237,6 +237,14 @@ const CRUSH_MASS_GAP = 0.5;
 const CRUSH_RADIUS_BASE = 1.1;
 const CRUSH_RADIUS_PER_MASS = 1.6;
 
+/**
+ * How far apart in x two words can be and still count as stacked, for the
+ * purpose of deciding which words are on the surface of the pile. Roughly an
+ * average word's half-width — wider and everything at floor level reads as
+ * buried, narrower and words sitting under a long neighbour read as exposed.
+ */
+const SURFACE_SPAN_UNITS = 0.7;
+
 /** Shortest signed angle from `angle` to upright (0), in (−π, π]. */
 function wrapToPi(angle: number): number {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
@@ -348,6 +356,16 @@ export interface PhysicsRoom {
    * drift a settled word upward without having to unfreeze it first.
    */
   remove(id: number): boolean;
+  /**
+   * Words with nothing resting on top of them, newest first, up to `limit`.
+   *
+   * This is the surface of the pile. The focus nudge uses it so that returning
+   * to the tab stirs what is visible rather than waking two hundred bodies and
+   * slumping sediment that has no business moving.
+   */
+  surfaceBodies(limit: number): WordBody[];
+  /** Turn one frozen word back to dynamic. A no-op if it is already awake. */
+  wake(id: number): void;
   /** Remove every body. */
   clear(): void;
 }
@@ -788,6 +806,37 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       if (!wordBody) return false;
       removeWord(wordBody);
       return true;
+    },
+
+    surfaceBodies(limit: number): WordBody[] {
+      // A word is buried if any other word's centre sits above it and close
+      // enough in x to be resting on it. O(n²) over at most 200 bodies, run
+      // once per resume — about 40,000 comparisons, which is nothing for
+      // something that happens when a tab regains focus.
+      const surface: WordBody[] = [];
+      for (const candidate of bodies) {
+        let buried = false;
+        for (const other of bodies) {
+          if (other === candidate) continue;
+          if (
+            other.y > candidate.y &&
+            Math.abs(other.x - candidate.x) < SURFACE_SPAN_UNITS
+          ) {
+            buried = true;
+            break;
+          }
+        }
+        if (!buried) surface.push(candidate);
+      }
+      // Newest first, so a cap takes the most recently placed words — the ones
+      // a visitor is most likely to still be looking at.
+      surface.sort((a, b) => b.id - a.id);
+      return surface.slice(0, limit);
+    },
+
+    wake(id: number): void {
+      const wordBody = bodies.find((candidate) => candidate.id === id);
+      if (wordBody?.frozen) wakeBody(wordBody);
     },
 
     drainCrushed(): number[] {

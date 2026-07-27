@@ -26,7 +26,7 @@ import {
 } from "./engine/physics";
 import { createRoomRenderer } from "./engine/renderer";
 import { axesForScores, NEUTRAL_AXES } from "./design/typography";
-import { roomTintAt, type RoomTint } from "./design/palette";
+import { createRoom } from "./world/room";
 import { loadPropertyModel, type PropertyModel } from "./ml/properties";
 import { NEUTRAL_SCORES } from "./ml/fallback";
 import { debug } from "./util/debug";
@@ -120,28 +120,6 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
     );
   });
 
-  /**
-   * The time-of-day tint, recomputed on a minute tick rather than per frame.
-   *
-   * The whole cycle moves 10° of hue over twenty-four hours, so per-frame
-   * sampling would be measuring floating-point noise — which is what
-   * DESIGN.md's "compute at frame boundary; do not re-sample per frame" is
-   * asking for. The renderer compares tint objects by identity to decide when
-   * to relight the room's ink, so handing back the *same* object between ticks
-   * is what makes that cheap.
-   */
-  let tint: RoomTint = roomTintAt(new Date());
-  let tintMinute = -1;
-  function currentTint(): RoomTint {
-    const now = new Date();
-    const minute = now.getHours() * 60 + now.getMinutes();
-    if (minute !== tintMinute) {
-      tintMinute = minute;
-      tint = roomTintAt(now);
-    }
-    return tint;
-  }
-
   const loop = createFrameLoop({
     physicsHz: (): number => room.physicsHz(),
     step(fixedDeltaMs): void {
@@ -152,6 +130,8 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       // Words crushed this step have already lost their bodies; hand them to the
       // renderer to press flat and fade where they sat.
       for (const id of room.drainCrushed()) renderer.crush(id);
+      // The room's own policy — currently just the soft cap.
+      world.step();
     },
     render(): void {
       renderer.render(
@@ -160,9 +140,37 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
         room.roomHeight / 2,
         WORD_EM_UNITS,
         cursorX,
-        currentTint(),
+        world.tint(),
       );
     },
+  });
+
+  const world = createRoom(room, renderer, loop);
+
+  // Physics pauses on *visibility*, not on window blur. DESIGN.md says blur and
+  // gives the reason as background CPU burn — but blur also fires when the
+  // window is merely not frontmost, which would freeze a room the visitor is
+  // still watching on another monitor. Blur pauses the caret's pulse, which is
+  // the part of the instruction that is genuinely about having the keyboard.
+  document.addEventListener("visibilitychange", (): void => {
+    world.onVisibilityChange(document.hidden);
+  });
+  window.addEventListener("focus", (): void => {
+    world.onFocusChange(true);
+  });
+  window.addEventListener("blur", (): void => {
+    world.onFocusChange(false);
+  });
+
+  // Clear. `input.ts` deliberately lets Cmd/Ctrl combinations through, so this
+  // is the only listener that sees it.
+  window.addEventListener("keydown", (event: KeyboardEvent): void => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k")
+      return;
+    // Claimed even when the room is too empty to clear, so the browser's own
+    // shortcut never fires over the piece.
+    event.preventDefault();
+    world.clear();
   });
 
   // The empty room is on screen from here. Everything below waits on the
@@ -205,6 +213,7 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
   if (import.meta.env.DEV) {
     (window as unknown as { drift: unknown }).drift = {
       room,
+      world,
       glyphs,
       properties,
       renderer,
