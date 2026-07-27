@@ -43,11 +43,11 @@ Transitions between periods are 30-minute smoothstep interpolations. Compute at 
 
 ## Typography
 
-**Display type (word bodies):** Archivo by Omnibus-Type. Variable, `wght` and `wdth` axes both required. SIL Open Font License; the variable file ships in `/public/fonts/`.
+**Display type (word bodies):** Archivo by Omnibus-Type. Variable, `wght` and `wdth` axes both required. SIL Open Font License; the variable file is a **build input** in `/fonts/` and is never downloaded by a visitor — outlines are baked at build time.
 
 > **Changed in Phase 2.** This originally specified Söhne Breit by Klim Type Foundry with variable weight and optical size. Klim ships Söhne — including Söhne Breit — as **static fonts only**: eight weights in roman and italic, no `wght` axis and no `opsz` axis. The variable-axis wiring below is load-bearing (`CLAUDE.md` calls it "the word IS the body" and says do not skip it), and a commit spring animating across eight discrete masters would pop rather than spring. Archivo is a grotesque in the same Akzidenz lineage with genuine designed masters across `wght 100–900` and `wdth 62–125`, and it is free, which removed the licensing question at the same time.
 
-**UI / meta type (footer, credit line, watermark):** undecided. Needs a mono; not required until Phase 3.
+**UI / meta type (footer, credit line, watermark):** **IBM Plex Mono**, SIL OFL, subset to the ~75 characters the piece actually sets (3.8 KB woff2, `/public/fonts/`). Chosen in Phase 3. A system mono stack was the alternative and is free, but an exported still's watermark is drawn on the visitor's machine — a system stack would put a different typeface on every image that leaves the piece, and the watermark is the one part of the identity that travels.
 
 **Fallback stack:** `ui-sans-serif, -apple-system, "SF Pro", "Inter", sans-serif` during font load. The first-load screen is intentionally still and quiet — the font swap should be imperceptible because there's nothing to compare against yet.
 

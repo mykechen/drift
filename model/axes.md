@@ -191,17 +191,38 @@ mistake.
 
 ---
 
-## Open question: does `age` earn its place?
+## Resolved in Phase 3: `age` wears the letterform
 
-Five of the six axes have a visible consequence the moment a word lands. `age`
-does not. Three options, to be settled after the pilot:
+Open from Phase 1a until Phase 3. Five of the six axes had a visible consequence
+the moment a word landed; `age` did not, and the three options on the table were
+to tint the glyph, to leave it latent as a gravity-only input, or to replace the
+axis outright.
 
-1. **Wire it to the glyph tint.** DESIGN.md's "ancient words" special behavior
-   applies a sepia tint off a hand-curated list of ~30 words. Driving that
-   continuously from the `age` score instead would give the axis a visible
-   consequence and fold a hardcoded list into the model.
-2. **Leave it latent.** Accept that it only shapes semantic gravity.
-3. **Replace it** with a different quality, before anything is labeled.
+**It wears the edge.** A word the model rates old renders very slightly eaten
+away and softer at its boundary, as though it has been sitting in the paper
+longer. `whence` (+0.79) and `granite` (+0.68) read worn; `startup` (−0.88) and
+`laptop` (−0.80) stay crisp.
 
-Changing this after the dataset is frozen means relabeling, so it should be
-resolved during Phase 1a.
+Two things made this the right option rather than the tint.
+
+**It is free.** The glyph is drawn from a signed distance field, so eroding it
+is a shift in *where that field is thresholded* — two uniforms and two lines of
+shader. No re-bake, no second texture, no geometry change. That matters because
+Phase 3 rejected the commit spring's axis animation on exactly the cost this
+avoids.
+
+**It does not eat a special behaviour.** Option 1 would have driven DESIGN.md's
+"ancient words" sepia continuously from this score, folding a curated list into
+the model — which sounds like a simplification and is actually a loss. That
+behaviour is a *momentary* flash at commit on ~30 words, and it is one of six
+things a visitor can discover. Wear is a permanent material property of every
+word. The two coexist and say different things: one is "this word is old", the
+other is "this word has been here".
+
+Shadows are deliberately exempt. Wear belongs to the ink on the paper; a shadow
+belongs to the light.
+
+The amounts live in `src/design/typography.ts` as `EDGE_EROSION_AT_OLDEST` and
+`EDGE_WEAR_AT_OLDEST`, and are small on purpose — DESIGN.md requires the room to
+read as one typeface at a glance, and a heavy erosion reads as a second,
+blurrier font mixed in.

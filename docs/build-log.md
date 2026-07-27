@@ -1509,3 +1509,256 @@ real figure is better.
 > judgement. The current values were chosen to be *visible* after the first pass
 > was not; whether they are now too visible for a piece this quiet is a feel
 > question.
+
+---
+
+## Phase 3 — the rest of the room's design
+
+Four questions went to the author before any code was written, because all four
+change what gets built rather than how. They are recorded in
+`docs/specs/2026-07-27-phase-3-room-design.md`; the reasoning is here.
+
+### The commit spring versus the SDF
+
+`DESIGN.md` springs `wght` and `wdth` from neutral to the model's values over
+~180ms. Geometry is cached at a 5-unit axis quantum, so that spring passes
+through roughly eleven distinct axis pairs — each one its own SDF bake at 4.7ms
+and its own ~15KB texture, none of which is ever read again. Eleven dropped
+frames per commit, and 33MB of dead textures across a full room, to animate
+180ms. The field cache is keyed on `WordPath` identity with no eviction, so
+none of it would ever be reclaimed either.
+
+**Decision: build geometry once at the target axes, spring only uniforms.**
+
+The thing that makes this safe is a distinction worth stating plainly: the axis
+**mapping** is the load-bearing move, not the axis **animation**. `CLAUDE.md`'s
+"the word IS the body — do not skip it" is about a heavy word rendering heavy,
+and that shipped in Phase 2. What springs now is `uScale` for the arrival's
+snap, plus the shadow's blur and drop growing in from zero — which `DESIGN.md`'s
+commit sequence already asks for in as many words ("shadow appears and blurs to
+its target radius"). `ROADMAP.md` already forbade rebuilding colliders during
+the spring; this is the same argument applied to the picture.
+
+Two alternatives were considered and rejected. Blending the neutral field into
+the target field in the shader costs *no* extra bakes — the neutral field is
+already cached, being the draft word that was just on screen — but `wdth` moves
+letters by far more than the field's 0.14 em spread, so the blend would
+crossfade letters between two positions rather than slide them. Accepting the
+churn behind an LRU is truest to the specification and was judged not worth a
+dropped frame per commit.
+
+Verified by counting: ten committed words created exactly ten textures.
+
+**Worth knowing before anyone tunes this.** Spring overshoot is a fraction of
+the *travel*, not of the target. The commit spring overshoots by 5.8% of
+however far it is asked to move, so driving scale from 0.92 to 1.0 peaks at
+1.004 — a snap you feel in the arrival, not a visible bounce past full size.
+`DESIGN.md`'s "more overshoot" is a comparison between its two spring configs
+(5.8% against the default's 1.1%), not a promise of a bounce.
+
+### Two places DESIGN.md disagrees with itself
+
+Both were resolved in favour of the number that describes what a visitor
+experiences, and both are recorded rather than silently picked.
+
+**The commit spring's duration.** It asks for "~180ms" *and* for "stiffness 180,
+damping 18". Those are different springs: at ζ = 0.671 the first overshoot peak
+lands at 308ms and the spring retires at 658ms. The named constants ship,
+because they are the explicit instruction; hitting 180ms would mean stiffness
+near 1000, which is a different feel rather than a different number. On the
+author's list.
+
+**The clear gesture's timing.** It asks for "staggered over 1.5s" *and*
+"~30ms apart", which diverge above about fifty bodies — at 200 a 30ms stagger
+takes six seconds. The stagger is clamped so the whole gesture always finishes
+in 1.5s, which makes 30ms exactly right at fifty and tighter above it. Measured:
+30 bodies and 200 bodies both empty in ~1.5s despite a 7× difference in stagger.
+
+### Density versus the crush, and why nothing was tuned
+
+A mixed vocabulary settles at about 60 bodies; it took 358 commits to reach 198.
+The soft cap of 200 therefore almost never fires.
+
+**Decision: change nothing.** The initial recommendation here was to retune the
+crush so the room would fill, and it was wrong — it imported a density target
+from the wording of feel test #4 rather than from what the piece is for. Words
+having discoverable physical consequences *is* the piece; a 60-word room with a
+crater where a heavy word landed is a better composition than a 200-word
+undifferentiated pile. The cap is reclassified from a mechanic to a
+long-session safety valve and the standing debt is closed as a finding.
+
+The one thing that was checked rather than assumed: **which words can actually
+crush.** `CRUSH_MIN_STRIKER_MASS` is 0.25, and across the 173 curated words that
+carry labels, **53 of them (31%) clear that gate.** The gate is not
+"heavyweight", it is "top third of the mass distribution", and the list contains
+some words `DESIGN.md` would not call heavy:
+
+- Genuinely heavy, as intended: `boulder` +0.90, `glacier` +0.90, `anchor`,
+  `granite`, `iron`, `steel`, `ballast`, `vault`, `cathedral`, `tomb`.
+- `grief` +0.80 — not a mistake, and arguably the best thing in the list. It is
+  the piece's whole thesis arriving on its own.
+- Onomatopoeia the model hears as heavy: `rumble` +0.80, `crash`, `thud`,
+  `clang`, `boom`, `bang`.
+- Colours and gemstones: `coral` +0.50, `sapphire`, `emerald`, `ruby`, `jade`,
+  `onyx`, `umber`, `cobalt`, `ochre`, `sienna`, `ivory`. Several of these are
+  also Phase 6 colour-word behaviours.
+- Archaic adverbs: `yore` +0.40, `henceforth` +0.30, `heretofore`, `behold`.
+
+Reach scales fast, because the radius is `1.1 + 1.6 × mass` in a room 17.8 units
+wide:
+
+| striker mass | radius | can crush | share of curated set |
+| --- | --- | --- | --- |
+| +0.30 (`sienna`) | 1.58 | 46 words | 27% |
+| +0.50 (`stone`) | 1.90 | 79 words | 46% |
+| +0.90 (`boulder`) | 2.54 | 130 words | 75% |
+
+A `boulder`'s crater spans 29% of the room's width. **`henceforth` flattening a
+feather is the concrete oddity**, and whether that is charming or wrong is the
+author's call — per the decision above, no constant was touched.
+
+### `age` gets a visual consequence: old words are worn
+
+Open since Phase 1a, and the only property the model predicts that nothing
+consumed. An old word now renders very slightly eaten away and softer at the
+boundary, as though it has been sitting in the paper longer.
+
+It is free, which is the reason it is possible at all: the glyph is drawn from a
+distance field, so eroding it is a shift in *where the field is thresholded*,
+not a different outline. No re-bake, no second texture, no geometry — the same
+argument as the commit spring, arriving at the opposite conclusion because this
+one costs nothing.
+
+It does not collide with Phase 6's ancient-words behaviour, which is a momentary
+sepia flash at commit on ~30 curated words; this is a permanent material
+property. Shadows are exempt: wear belongs to the ink on the paper, and a shadow
+belongs to the light.
+
+The model separates the cases cleanly — `whence` +0.79 and `granite` +0.68
+against `startup` −0.88 and `laptop` −0.80 — and old words render a 26% wider
+edge transition band. Note that proxy is confounded by stroke weight, since a
+light word's thin strokes mimic a worn edge, so `whence` over `startup` measures
+1.39× against 1.49× predicted.
+
+### The mono face: IBM Plex Mono, 3.8 KB
+
+A system stack was the placeholder and would have been defensible — free, never
+blocks, no licence question. What decided against it is the **watermark**: an
+exported still is drawn on the visitor's machine, so a system stack means every
+image leaving the piece carries a different typeface, and the watermark is the
+one part of the identity that travels.
+
+Subset to the 75 characters the piece actually sets, assembled from the real
+strings rather than a guessed range — a guessed range is how a subset quietly
+stops being a subset — and the script fails above 8 KB for the same reason.
+
+**Source fonts moved out of `public/`.** Vite copies that directory wholesale,
+so `Archivo.ttf` was being *deployed*: 658 KB sitting at the edge that no
+visitor ever requests, and invisible to `pnpm measure` because that follows
+references from the entry rather than listing the bucket. Build inputs now live
+in `fonts/`; only the subset lands in `public/`.
+
+### Three bugs found by looking rather than by failing
+
+None of these announced themselves.
+
+**`hello123` became a body.** `normalizeWord` already implemented all three of
+`DESIGN.md`'s refusals — a digit anywhere, nothing left after stripping trailing
+punctuation, longer than 24 characters — but `commitWord` read a null
+*prediction* as "the model is unavailable" and committed anyway with neutral
+scores. The rule was computed and then discarded. Asking `normalizeWord`
+directly separates "this is not a word" from "inference is not running", which
+are opposite situations: the first must refuse, the second must still let the
+room work.
+
+**The glyph was losing its punctuation.** `DESIGN.md` says trailing punctuation
+is preserved in the glyph and included in the body's shape, stripped only before
+inference — but geometry was built from the model's stripped word, so `hello,`
+committed as a body reading `hello`. The bake covers all printable ASCII; the
+comma was always there and nothing was asking for it. `hello,` is now 33 hulls
+at 2.504 em against `hello`'s 31 at 2.255.
+
+**`pnpm measure` was under-reporting.** Its reference regex required a quote
+before a path, which is true of every reference in HTML and JS — but Vite
+minifies CSS to `url(/fonts/x.woff2)` with the quotes stripped, so the mono
+subset was being downloaded and not counted. The failure mode is the dangerous
+direction for a number the roadmap treats as a budget.
+
+### Smaller things that were measured rather than assumed
+
+**The caret was drawn underneath the words.** Parented into the ink layer it
+drew *before* every word, because OGL keeps equal-depth transparent meshes in
+traversal order and the caret is created once at startup while words are
+appended as they commit. Measured: 200 accent pixels fell to 22 as soon as
+anything was being typed. It has its own layer now.
+
+**The aging fade's opacity is linear while its motion eases out.** Running
+opacity through the same ease-out left the word 87.5% gone at the halfway point
+— it stopped registering at all after about 1s of a 2s fade, so the back half of
+the drift was animating something invisible.
+
+**Spring rest detection is relative to travel.** An absolute epsilon larger than
+the travel reports rest at the overshoot *peak*, where the spring is momentarily
+at zero velocity and already inside epsilon. The commit spring retired at 308ms
+— exactly its peak — freezing every word mid-bounce. Scaled by travel it retires
+at 658ms.
+
+**The soft cap had to become an invariant, not an event.** Enforced from a
+commit callback it depended on every path that adds a word remembering to
+announce itself; the dev console handle did not, and the room quietly reached
+215 bodies. Checked from the room's step it settles at exactly 200.
+
+**Waking a settled word does nothing.** The focus nudge originally only turned
+frozen bodies back to dynamic, which is a no-op that looks like a feature: a
+settled word is in equilibrium, so it simply re-freezes 1.5s later having not
+moved. `stir` shoves as well as wakes.
+
+### The blur/visibility split
+
+`DESIGN.md` says window blur pauses physics and gives the reason as background
+CPU burn. But `blur` also fires when the window is merely not frontmost, so
+clicking a window on a second monitor would freeze a room the visitor is still
+watching. The pause keys on `visibilitychange`, which is the case the stated
+reason actually describes; blur pauses only the caret's pulse, which is the part
+genuinely about holding the keyboard.
+
+The resume nudge stirs the *surface* — words with nothing resting above them,
+capped at 40 — rather than "all sleeping bodies". Waking a full pile costs a
+second of full-room physics on every tab return and would visibly slump sediment
+the visitor left settled. Measured on a 60-word pile with 59 frozen: hidden
+stops the loop dead and zero bodies move; on resume 4 of the 12 surface words
+shift measurably, every one on the surface, and all 47 buried words stay frozen.
+
+### The grain
+
+Two octaves, not one. `DESIGN.md` asks for "low frequency", which alone gives
+mottle with no surface to it; the fine octave supplies tooth. Together they read
+as stock, separately as either a gradient artefact or as video noise.
+
+**No time uniform, deliberately.** Animated grain is the obvious reading and it
+is wrong here: it would be the only continuously moving thing in an empty room,
+in a piece whose argument is stillness, and it would make the still export a lie
+by freezing one arbitrary frame of what the visitor saw as shimmer.
+
+Measured: the midday mean lands on `#F4F0E8` to within 0.03 of a level, so the
+grain is centred rather than darkening the paper; range ±3 levels; adjacent
+pixels differ by 0.63 on average. Night reads 5 levels darker in red and 10 in
+blue.
+
+### Time of day
+
+`#F4F0E8` is hue 40° in HSL — it sits in the oranges — so **warm is a negative
+hue offset and cool is positive.** Getting that backwards would make golden hour
+cool and evening warm, and at a 6° excursion nobody would notice for weeks.
+Verified by measuring the output back: golden hour lands at 32° against a 40°
+base, night at 42°.
+
+The period table stores each period's *start* minute rather than its plateau,
+which is what makes the night-to-morning wrap across midnight arithmetic instead
+of a special case. Measured: max change 0.013 across 5-minute samples, midnight
+wrap exactly 0, midday exactly `#F4F0E8`.
+
+The tint is recomputed on a minute tick and the *same object* is handed back in
+between, which is what lets the renderer decide by identity whether the room's
+light has moved — so two hundred words are relit once a minute rather than every
+frame.

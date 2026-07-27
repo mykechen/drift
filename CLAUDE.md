@@ -30,7 +30,7 @@ If a proposed feature does not directly serve *"typed word becomes a physical bo
 - **Framework:** [Vite](https://vitejs.dev/) + vanilla TS. No React, no Vue, no Svelte. The piece has no component tree worth managing.
 - **Rendering:** WebGL via [OGL](https://github.com/oframe/ogl) (preferred) or [regl](https://github.com/regl-project/regl). NOT Three.js.
   - *Future note:* WebGPU is viable in 2026 (Chrome, Edge, Safari; Firefox still lagging). If v2 introduces compute-shader work — for example, moving the semantic-gravity force field onto the GPU — migrating to WebGPU via `webgpu-utils` becomes worthwhile. For v1, WebGL is correct: broader support, less setup, and no compute shaders in scope.
-- **Display typeface:** [Archivo](https://github.com/Omnibus-Type/Archivo) variable (`wght 100–900`, `wdth 62–125`), SIL OFL, in `/public/fonts/Archivo.ttf`. Replaced Söhne Breit in Phase 2 because Klim ships Söhne static-only and the variable-axis wiring is load-bearing — see the note in `DESIGN.md`. Archivo is TrueType, so outlines are quadratic curves only; there are no cubics to flatten.
+- **Display typeface:** [Archivo](https://github.com/Omnibus-Type/Archivo) variable (`wght 100–900`, `wdth 62–125`), SIL OFL, in `/fonts/Archivo.ttf` — **build input, not served.** Source fonts sit outside `public/` deliberately: Vite copies that directory wholesale, so a font kept there is deployed even when nothing links to it, and `pnpm measure` will not notice because it follows references rather than listing the bucket. Replaced Söhne Breit in Phase 2 because Klim ships Söhne static-only and the variable-axis wiring is load-bearing — see the note in `DESIGN.md`. Archivo is TrueType, so outlines are quadratic curves only; there are no cubics to flatten.
 - **Glyph rendering:** SDF-rendered. [fontkit](https://github.com/foliojs/fontkit) reads the outlines, but **at build time only — it is a devDependency and never ships.** Phase 2.5 took the "if that becomes a problem" escape hatch this entry used to describe: `scripts/build-glyph-outlines.ts` samples `font.getVariation({ wght, wdth })` over a 6×3 axis grid and writes `src/engine/glyph-outlines.bin`; the runtime interpolates between samples. Point-compatibility is what makes that safe, and the script *checks* it per glyph rather than trusting it. Two things to know before touching this: what is baked is the **raw quadratic control points**, not flattened polygons, so the flattening tolerance stays a runtime knob and the SDF has true curves to read; and the grid must **land on the font's masters** — `wdth 100` is one, and a grid that misses it measures nine times the interpolation error. Ligatures (`ff fi fl ffi ffl`) are baked as their own entries because dropping fontkit means dropping `layout()`, which is what applied them.
 - **Physics:** [Rapier2D](https://rapier.rs/) via WASM. NOT Matter.js. Use `@dimforge/rapier2d`, **not** `-compat`: the compat build base64-inlines its WebAssembly into the JS, which costs 121KB brotli over the raw binary and prevents the engine being cached as its own file. It must be listed in `optimizeDeps.exclude` — the dependency pre-bundle breaks its `__wbg_set_wasm` hand-off, and it fails *only in dev*, at the first `createRigidBody`.
 - **Convex decomposition:** required for glyph collision shapes. Use [earcut](https://github.com/mapbox/earcut) to tessellate, then merge triangles into convex hulls.
@@ -71,6 +71,8 @@ Do not introduce dependencies not on this list without asking. Every additional 
 │   │   ├── input.ts          (keyboard state, word buffer, commit logic)
 │   │   ├── loop.ts           (frame loop, physics substepping, sleep mgmt)
 │   │   ├── glyphs.ts         (baked outlines → convex hulls → SDF)
+│   │   ├── sdf.ts            (Path2D raster + 8SSEDT → one field per word)
+│   │   ├── background.ts     (the paper: time-of-day colour + procedural grain)
 │   │   └── glyph-outlines.bin (baked by /scripts, imported with ?url)
 │   ├── /ml
 │   │   ├── properties.ts     (word → 6 property scores, ONNX inference)
@@ -92,15 +94,18 @@ Do not introduce dependencies not on this list without asking. Every additional 
 │   ├── eval.py
 │   ├── export_onnx.py
 │   └── /data                 (word lists, labels, embeddings — gitignored if large)
+├── /fonts                    (source faces, SIL OFL — build inputs, never served)
+│   ├── Archivo.ttf           (display; read by scripts/build-glyph-outlines.ts)
+│   └── IBMPlexMono-Regular.ttf (mono; read by scripts/build-mono-subset.ts)
 ├── /public
-│   ├── /fonts                (Archivo variable, SIL OFL — build input, not served to visitors)
+│   ├── /fonts                (plex-mono-subset.woff2 — the only font a visitor downloads)
 │   ├── mobile-fallback.webp  (still of a composition, for the mobile screen)
 │   ├── og.png                (1200×630 OG image, static)
 │   └── favicon.svg
 └── /scripts
     ├── build-glyph-outlines.ts (bakes the axis grid — `pnpm bake:glyphs`)
-    ├── measure-payload.ts    (per-asset brotli cost of a cold visit — `pnpm measure`)
-    └── build-sdf-atlas.ts    (build-time SDF atlas generation — Phase 3)
+    ├── build-mono-subset.ts  (subsets IBM Plex Mono — `pnpm bake:mono`)
+    └── measure-payload.ts    (per-asset brotli cost of a cold visit — `pnpm measure`)
 ```
 
 ---

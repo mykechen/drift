@@ -16,7 +16,8 @@ Phases are annotated as they complete, including where the plan turned out to be
 | 1 — The property model | **done**, all exit criteria met |
 | 2 — Words as physics bodies | **done** — feel test 1 passes, rotation resolved, SDF shipped |
 | 2.5 — Payload | **done**, all exit criteria met |
-| 3–9 | not started |
+| 3 — The room's design | **done**, all exit criteria met |
+| 5a–9 | not started |
 
 **Actual build order, revised.** Two changes from the original sequence:
 
@@ -132,26 +133,43 @@ Done **before** the SDF work, because baking outlines at build time changes what
 
 ---
 
-## Phase 3 — The room's design (1 week)
+## Phase 3 — The room's design (1 week) — **done**
 
 The visible design layer. At this point the piece should already be functional but ugly. Now make it beautiful.
 
-- [ ] Palette per `DESIGN.md`. Time-of-day shift.
-- [ ] Procedural grain shader.
-- [ ] Shadows: mass-scaled blur radius and offset.
-- [ ] Semantic tint mapping (warmth score → ink hue).
-- [ ] Commit spring animation on variable font axes.
-  - **Do not rebuild colliders during the spring.** Build them once at the *target* axes and spring only the rendered axes. Re-decomposing every frame for 180ms is expensive, and a collision shape changing under a settling body invites instability. The 180ms mismatch between drawn and simulated shape is invisible; the alternative is not.
-- [ ] Cursor render + pulse. Accent `#D94F1E`, 2s sine, opacity 60% → 100%.
-- [ ] Word aging: soft cap at 200, fade-out of oldest. — note that frozen bodies are static; removal is fine, but any upward drift during fade-out needs them unfrozen first.
-- [ ] Clear (Cmd/Ctrl+K).
-- [ ] Focus/defocus handling.
-- [x] Mobile fallback screen. — **done in Phase 2.5**, since gating had to happen before any heavy import anyway. One thing is left for this phase: the still is captured from the *functional-and-ugly* build and must be regenerated once the room has its SDF, shadows, tint and grain. Its caption also wants the mono face below.
-- [ ] **Choose the mono face.** Still undecided since the typeface change. Only used at 10–12pt for the footer, credit line and export watermark, so this is low-stakes — but `DESIGN.md` and `brand-guidelines.md` both say "the mono face" and need filling in.
-- [ ] **Judge the character branch now that warmth is visible.** Nonsense reads mildly warm (`asdf` warmth +0.66) and neutral-mass rather than light, which is not what `DESIGN.md`'s "light, drifty, unstable" describes. Deferred from Phase 1c specifically so it could be judged as colour and motion rather than as numbers.
-- [ ] **Decide whether `age` gets a visual consequence.** Open since Phase 1a. Either give it one here or accept that it is a gravity-only input and record that in `axes.md`.
+- [x] Palette per `DESIGN.md`. Time-of-day shift. — background hue/lightness over five periods with 30-minute smoothsteps; warm is a *negative* hue offset because the paper sits at hue 40°.
+- [x] Procedural grain shader. — two octaves at ±2%, tooth plus mottle, and deliberately **static**: animated grain would be the only moving thing in an empty room and would make the still export a lie.
+- [x] Shadows: mass-scaled blur radius and offset. — done earlier in the phase, read out of the SDF.
+- [x] Semantic tint mapping (warmth score → ink hue). — done earlier in the phase.
+- [x] Commit spring animation on variable font axes. — **not on the axes.** Geometry builds once at the target axes and the spring drives `uScale` and the shadow's blur and drop. Springing the axes would cost ~11 SDF bakes and ~11 dead textures a word; the axis *mapping* is the load-bearing move and it is untouched. Verified: ten words, ten textures.
+- [x] Cursor render + pulse. Accent `#D94F1E`, 2s sine, opacity 60% → 100%. — rides the right edge of the draft, in its own scene layer above the ink.
+- [x] Word aging: soft cap at 200, fade-out of oldest. — reuses the crush's exit path (physics drops the body, the renderer animates the mesh), which dissolves the unfreezing problem this line used to warn about. Enforced as a room *invariant* rather than a commit event.
+- [x] Clear (Cmd/Ctrl+K).
+- [x] Focus/defocus handling. — pause keys on `visibilitychange`, not window blur; the resume nudge stirs the surface, not all 200.
+- [x] Mobile fallback screen. — **done in Phase 2.5.** The still was regenerated this phase against the finished room, and its caption now has the mono face.
+- [x] **Choose the mono face.** — **IBM Plex Mono**, SIL OFL, subset to 75 characters and 3.8 KB. Decided by the watermark: an exported still is drawn on the visitor's machine, so a system stack would put a different typeface on every image that leaves the piece.
+- [x] **Judge the character branch now that warmth is visible.** — judged; see the note below and `docs/build-log.md`.
+- [x] **Decide whether `age` gets a visual consequence.** — **yes.** Old words render very slightly eroded and softer at the edge. Free, because the glyph is drawn from a distance field and this is a shift in where that field is thresholded. Recorded in `model/axes.md`.
 
 **Exit criteria:** feel test #4 passes — a still export the next morning still looks composed and considered.
+
+> **Three bugs found by looking, not by failing.** `hello123` became a body —
+> `normalizeWord` implemented all three refusals but `commitWord` read a null
+> *prediction* as "model unavailable" and committed anyway. The glyph was losing
+> its trailing punctuation, because geometry was built from the model's stripped
+> word. And `pnpm measure` was under-reporting, because its reference regex
+> required a quote and Vite emits `url(/fonts/x.woff2)` unquoted.
+
+> **`DESIGN.md` disagrees with itself in two places**, and both are resolved in
+> code with the reasoning recorded. The commit spring cannot be both "~180ms"
+> and "stiffness 180, damping 18" (that spring peaks at 308ms); the clear cannot
+> be both "over 1.5s" and "~30ms apart" above fifty bodies. The named constants
+> win in the first case, the stated total in the second.
+
+> **Source fonts moved out of `public/`.** Vite copies that directory wholesale,
+> so `Archivo.ttf` was being deployed — 658 KB at the edge that nothing ever
+> requests, and invisible to `pnpm measure`, which follows references rather than
+> listing the bucket. Build inputs live in `fonts/` now.
 
 ---
 
@@ -272,12 +290,12 @@ Carried items that belong to no single phase. Each is recorded in `docs/build-lo
 | ~~~3MB payload~~ | ~~Phase 2.5~~ | **Resolved** — 3487 KB → 3174 KB desktop, 21.6 KB mobile |
 | The canvas never paints "contentful" | Phase 4 / 7 | Lighthouse scores the room route `NO_FCP`. Needs the footer's DOM text; re-run then |
 | Proper nouns and slurs in the vocabulary | Phase 8 | Launch-ending if missed |
-| Mono face undecided | Phase 3 | Two spec documents say "the mono face" |
-| `age` axis has no visual consequence | Phase 3 | Open since Phase 1a |
-| Character branch reads warm, not light | Phase 3 | Judge as colour, not as numbers |
+| ~~Mono face undecided~~ | ~~Phase 3~~ | **Resolved** — IBM Plex Mono, subset to 3.8 KB |
+| ~~`age` axis has no visual consequence~~ | ~~Phase 3~~ | **Resolved** — old words render eroded and soft-edged |
+| ~~Character branch reads warm, not light~~ | ~~Phase 3~~ | **Judged** — see `docs/build-log.md`; no retrain this phase |
 | ~~Every word spawns at x=0~~ | ~~Phase 3 / 5a~~ | **Resolved** — the cursor follows the mouse; words land where you aim |
 | ~~Step-cost p50 unverified since the physics rework~~ | ~~Phase 2~~ | **Resolved** — 6.2ms p50 with 199 bodies awake, against a 16.7ms budget |
-| Crush clears faster than the density cap | Phase 3 | 358 commits to reach 198 bodies; DESIGN.md's soft-cap-at-200 aging may never trigger |
+| ~~Crush clears faster than the density cap~~ | ~~Phase 3~~ | **Closed as a finding, not a fix.** The crush is the clearing path a visitor meets; the 200 cap is a long-session safety valve. 31% of curated words clear the striker gate — see `docs/build-log.md` |
 | Domain TBD | Phase 8 | Watermark and OG image need it |
 
 ---
