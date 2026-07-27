@@ -27,6 +27,11 @@ import {
   stepSpring,
   type Spring,
 } from "../design/motion";
+import {
+  EDGE_EROSION_AT_OLDEST,
+  EDGE_WEAR_AT_OLDEST,
+  wearForAge,
+} from "../design/typography";
 import type { WordOutline, WordPath } from "./glyphs";
 import type { WordBody } from "./physics";
 import { createSdfBaker, SPREAD_EM, type SdfField } from "./sdf";
@@ -151,13 +156,22 @@ const FRAGMENT_SHADER = /* glsl */ `
   // falls away outward, rather than a narrow one straddling it — which is what
   // makes it read as cast rather than as a fattened copy of the word.
   uniform float uBlur;
+  // How eaten and how soft this word's edge is, from the model's age score.
+  // Zero for a new word, and for every shadow — a worn word does not cast a
+  // worn shadow, because wear is a property of the ink on the paper and the
+  // shadow is a property of the light.
+  uniform float uErode;
+  uniform float uWear;
 
   varying vec2 vUv;
 
   void main() {
     float distance = texture2D(uField, vUv).r;
-    float lower = uBlur > 0.0 ? 0.5 - 2.0 * uBlur : 0.5 - uEdgeSoftness;
-    float upper = uBlur > 0.0 ? 0.5 : 0.5 + uEdgeSoftness;
+    // Pushing the threshold *up* eats into the letter: a texel now has to be
+    // deeper inside the glyph to count as ink.
+    float soft = uEdgeSoftness * (1.0 + uWear);
+    float lower = uBlur > 0.0 ? 0.5 - 2.0 * uBlur : 0.5 + uErode - soft;
+    float upper = uBlur > 0.0 ? 0.5 : 0.5 + uErode + soft;
     float coverage = smoothstep(lower, upper, distance);
     if (coverage <= 0.0) discard;
     gl_FragColor = vec4(uInk, uAlpha * coverage);
@@ -525,6 +539,8 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           uAlpha: { value: 1 },
           uEdgeSoftness: { value: 0.1 },
           uBlur: { value: 0 },
+          uErode: { value: 0 },
+          uWear: { value: 0 },
         },
       }),
     });
@@ -543,6 +559,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     emHeight: number,
     mass: number,
     warmth: number,
+    age: number,
     castsShadow: boolean,
   ): WordMeshes | null {
     const inkMesh = buildMesh(path, emWidth, emHeight);
@@ -550,6 +567,13 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
 
     (inkMesh.program.uniforms["uInk"] as { value: number[] }).value =
       inkForWarmth(warmth, currentTint ?? undefined);
+    // Wear is written once — `age` never changes for a committed word, unlike
+    // the tint, which is why this needs no per-frame refresh.
+    const wear = wearForAge(age);
+    (inkMesh.program.uniforms["uErode"] as { value: number }).value =
+      wear * EDGE_EROSION_AT_OLDEST;
+    (inkMesh.program.uniforms["uWear"] as { value: number }).value =
+      wear * EDGE_WEAR_AT_OLDEST;
     inkMesh.setParent(inkLayer);
 
     const bare = {
@@ -632,6 +656,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       height,
       body.scores.mass,
       body.scores.warmth,
+      body.scores.age,
       true,
     );
     if (!pair) return;
@@ -654,7 +679,17 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     // The uncommitted word renders at neutral axes, so it gets neutral ink —
     // the model's opinion arrives on commit, and that includes its opinion
     // about colour. No shadow, per DESIGN.md.
-    draft = buildWord(outline.path, outline.width, outline.height, 0, 0, false);
+    // The draft is neutral in every axis the model has an opinion about,
+    // including age — its opinion arrives on commit.
+    draft = buildWord(
+      outline.path,
+      outline.width,
+      outline.height,
+      0,
+      0,
+      0,
+      false,
+    );
     draftWidthEm = outline.width;
   }
 

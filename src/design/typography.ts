@@ -40,6 +40,38 @@ const WEIGHT_AT_HEAVIEST = 800;
 const WIDTH_AT_QUIETEST = 85;
 const WIDTH_AT_LOUDEST = 125;
 
+/**
+ * Wear: what the `age` score does to a letterform.
+ *
+ * `age` was the one property the model predicts that nothing consumed — open
+ * since Phase 1a. Old words now render very slightly eaten away and softer at
+ * the boundary, as though they have been sitting in the paper longer.
+ *
+ * It costs nothing, which is why it is possible at all: the glyph is drawn from
+ * a distance field, so eroding it is a shift in where the field is thresholded
+ * rather than a different outline. There is no re-bake, no second texture and
+ * no geometry change — the same reason the commit spring drives uniforms only.
+ *
+ * This does **not** collide with Phase 6's ancient-words behaviour. That is a
+ * momentary sepia flash at commit on a curated list of about thirty words; this
+ * is a permanent material property of every word the model rates old.
+ *
+ * Both values are small on purpose. `DESIGN.md` requires the room read as one
+ * typeface at a glance, and a heavy erosion would read as a second, blurrier
+ * font mixed in.
+ *
+ * `EDGE_EROSION_AT_OLDEST` is in field units, where the whole field spans 1.0
+ * across `2 × SPREAD_EM`; `EDGE_WEAR_AT_OLDEST` multiplies the edge softness,
+ * so 0.6 means the oldest word's edge is 60% softer than a new one's.
+ */
+export const EDGE_EROSION_AT_OLDEST = 0.012;
+export const EDGE_WEAR_AT_OLDEST = 0.6;
+
+/** `age` in [-1, 1] mapped to a 0–1 wear amount. */
+export function wearForAge(age: number): number {
+  return (Math.max(-1, Math.min(1, age)) + 1) / 2;
+}
+
 export interface FontAxes {
   readonly wght: number;
   readonly wdth: number;
