@@ -76,8 +76,18 @@ export interface PropertyModel {
 // --- Encoding constants. Mirrored from model/data.py; changing one without the
 // --- other silently corrupts every prediction.
 
-/** DESIGN.md caps a committed word at 24 characters. */
-const MAX_WORD_LENGTH = 24;
+/**
+ * DESIGN.md caps a committed word at 24 characters.
+ *
+ * Exported so `input.ts` can stop the 25th keystroke rather than letting a word
+ * form that would be refused at commit. It is deliberately the *same* constant
+ * and not a second one that happens to match: the character branch encodes
+ * exactly this many characters, so a larger input cap would build words the
+ * model cannot see the end of, and a smaller one would waste encoder width.
+ * Like everything else in this block it is mirrored from `model/data.py` and
+ * must not be changed on one side alone.
+ */
+export const MAX_WORD_LENGTH = 24;
 /** Id 0 is padding, masked out of the character mean-pool. */
 const PAD_ID = 0;
 /** Any character outside a-z. The corpus is a-z only; typed input is not. */

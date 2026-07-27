@@ -4,18 +4,27 @@
  * Listens on the window rather than an `<input>` element — the piece has no
  * form controls and the caret is drawn, not native.
  *
- * Phase 0 captures typing and nothing more. The commit rules that produce
- * visible feedback — digits rejected, 24-character cap, standalone punctuation
- * refused — land in Phase 2 alongside the shake that communicates them.
+ * The commit rules that produce visible feedback — digits rejected,
+ * 24-character cap, standalone punctuation refused — landed in Phase 3, with
+ * the shake that communicates them. The rules themselves live in
+ * `normalizeWord`; what is here is the length cap, which has to act on the
+ * keystroke rather than at commit so that the 25th character never appears.
  */
 
 import { debug } from "../util/debug";
+import { MAX_WORD_LENGTH } from "../ml/properties";
 
 export interface WordInputCallbacks {
   /** Fires whenever the in-progress buffer changes, including when cleared. */
   onChange(buffer: string): void;
   /** Fires when space or enter commits a non-empty buffer. */
   onCommit(word: string): void;
+  /**
+   * Fires when the piece refuses an keystroke or a commit: past the length cap,
+   * or backspace on an empty buffer. DESIGN.md answers all of these with the
+   * same subtle shake, so they are one callback rather than three.
+   */
+  onRejected(): void;
 }
 
 export interface WordInput {
@@ -43,12 +52,24 @@ export function attachWordInput(
   }
 
   function backspace(): void {
-    if (buffer.length === 0) return;
+    // DESIGN.md: "If the word is empty, backspace is a no-op (small subtle
+    // shake to indicate)."
+    if (buffer.length === 0) {
+      callbacks.onRejected();
+      return;
+    }
     buffer = buffer.slice(0, -1);
     callbacks.onChange(buffer);
   }
 
   function append(character: string): void {
+    // The cap acts on the keystroke, not on the commit. Accepting a 25th
+    // character and refusing the whole word later would let the visitor watch
+    // something form that was never going to be allowed.
+    if (buffer.length >= MAX_WORD_LENGTH) {
+      callbacks.onRejected();
+      return;
+    }
     buffer += character;
     callbacks.onChange(buffer);
   }

@@ -23,6 +23,8 @@ import { createBackground } from "./background";
 import {
   COMMIT_SPRING,
   createSpring,
+  SHAKE_DURATION_MS,
+  shakeOffset,
   springAtRest,
   stepSpring,
   type Spring,
@@ -292,6 +294,14 @@ export interface RoomRenderer {
    */
   readonly setPulsePaused: (paused: boolean) => void;
   /**
+   * The refusal gesture: a brief damped jitter on the draft word and the caret.
+   *
+   * DESIGN.md answers every refusal with the same "subtle shake" — a keystroke
+   * past the length cap, backspace into an empty buffer, a word with a digit,
+   * standalone punctuation — so this is one gesture rather than four.
+   */
+  readonly shake: () => void;
+  /**
    * Advance the commit springs by one fixed timestep.
    *
    * Called from the loop's `step`, not from `render`, so a spring settles the
@@ -453,6 +463,13 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   let pulseMs = 0;
   let pulsePaused = false;
   let lastPulseSampleMs = performance.now();
+
+  /**
+   * When the current refusal shake began, or null if nothing is being refused.
+   * Wall-clock like the pulse — it is feedback about an input event, not part
+   * of the simulation.
+   */
+  let shakeStartedMs: number | null = null;
 
   /**
    * OGL's `setSize` writes inline `width`/`height` pixel styles onto the canvas
@@ -836,6 +853,11 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       if (pulsePaused && !paused) lastPulseSampleMs = performance.now();
       pulsePaused = paused;
     },
+    shake(): void {
+      // Restarted rather than queued: hold a key down past the cap and the
+      // gesture should stay one continuous shudder, not a backlog of them.
+      shakeStartedMs = performance.now();
+    },
     detachAll,
     resize,
     render(
@@ -1010,11 +1032,20 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
         }
       }
 
+      // The refusal shake displaces the draft and the caret together, so they
+      // read as one object being refused rather than two things twitching.
+      let shakeX = 0;
+      if (shakeStartedMs !== null) {
+        const elapsed = performance.now() - shakeStartedMs;
+        if (elapsed >= SHAKE_DURATION_MS) shakeStartedMs = null;
+        else shakeX = shakeOffset(elapsed) * wordScale;
+      }
+
       if (draft) {
         // The draft is centred on the cursor — which follows the mouse in x —
         // rather than growing rightward from a caret, so it sits exactly where
         // the committed body will spawn (DESIGN.md: words land at the cursor).
-        place(draft.ink, cursorX, 0, 0, 0);
+        place(draft.ink, cursorX + shakeX, 0, 0, 0);
       }
 
       // The caret rides the *right edge* of the draft rather than sitting on
@@ -1041,7 +1072,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
         const offsetEm =
           draftWidthEm > 0 ? draftWidthEm / 2 + CURSOR_GAP_EM : 0;
         (uniforms["uTranslation"] as { value: number[] }).value = [
-          cursorX + offsetEm * wordScale,
+          cursorX + offsetEm * wordScale + shakeX,
           0,
         ];
         (uniforms["uSize"] as { value: number[] }).value = [

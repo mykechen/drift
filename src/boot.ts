@@ -27,7 +27,11 @@ import {
 import { createRoomRenderer } from "./engine/renderer";
 import { axesForScores, NEUTRAL_AXES } from "./design/typography";
 import { createRoom } from "./world/room";
-import { loadPropertyModel, type PropertyModel } from "./ml/properties";
+import {
+  loadPropertyModel,
+  normalizeWord,
+  type PropertyModel,
+} from "./ml/properties";
 import { NEUTRAL_SCORES } from "./ml/fallback";
 import { debug } from "./util/debug";
 
@@ -46,16 +50,37 @@ async function commitWord(
   physics: PhysicsRoom,
   raw: string,
   spawnX: number,
-): Promise<void> {
+): Promise<boolean> {
+  // Rejection is decided here, not inferred from a missing prediction, and the
+  // difference was a real bug. `normalizeWord` already implements all three of
+  // DESIGN.md's refusals — a digit anywhere, nothing left after stripping
+  // trailing punctuation, longer than 24 characters — but this function used to
+  // read a null *prediction* as "the model is unavailable" and commit anyway
+  // with neutral scores. The rule was computed and then discarded, so `hello123`
+  // became a body. Asking directly separates "this input is not a word" from
+  // "inference is not running", which are opposite situations: the first must
+  // refuse, the second must still let the room work.
+  if (normalizeWord(raw) === null) return false;
+
   const prediction = model ? await model.predict(raw) : null;
   const scores = prediction?.scores ?? NEUTRAL_SCORES;
-  const word = prediction?.word ?? raw.toLowerCase();
 
-  const geometry = glyphSource.geometryFor(word, axesForScores(scores));
-  const body = physics.commit(word, geometry, scores, spawnX);
-  if (!body) return;
+  // The glyph keeps its punctuation; only the *model* sees the stripped word.
+  // DESIGN.md: "Trailing punctuation on a word is preserved in the glyph but
+  // stripped before ML inference. The physical body includes the punctuation as
+  // part of its shape." This used to draw `prediction.word`, which is the
+  // stripped form — so `hello,` committed as a body reading `hello` and the
+  // comma was silently dropped from both the picture and the collider. The bake
+  // covers all printable ASCII, so the comma was always available; nothing was
+  // asking for it.
+  const glyph = raw.toLowerCase();
+
+  const geometry = glyphSource.geometryFor(glyph, axesForScores(scores));
+  const body = physics.commit(glyph, geometry, scores, spawnX);
+  if (!body) return false;
 
   renderer.attach(body);
+  return true;
 }
 
 /**
@@ -197,7 +222,17 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       // Cleared here rather than after inference resolves, so the draft does not
       // linger for a frame on top of the body that replaces it.
       renderer.setDraft(null);
-      void commitWord(renderer, properties, glyphs, room, word, cursorX);
+      void commitWord(renderer, properties, glyphs, room, word, cursorX).then(
+        (committed): void => {
+          // A refused word shakes. The draft is already gone by now, so what
+          // shakes is the caret alone — which is the right reading: the room
+          // declined to take the word, and there is nothing left to shake.
+          if (!committed) renderer.shake();
+        },
+      );
+    },
+    onRejected(): void {
+      renderer.shake();
     },
   });
 
