@@ -214,6 +214,7 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
     (window as unknown as { drift: unknown }).drift = {
       room,
       world,
+      loop,
       glyphs,
       properties,
       renderer,

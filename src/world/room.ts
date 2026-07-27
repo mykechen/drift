@@ -178,11 +178,12 @@ export function createRoom(
       if (loop.isRunning) return;
       loop.start();
 
-      // Stir the surface so the room does not look embalmed on return. Frozen
-      // words are static bodies, so waking them is what makes an impulse mean
-      // anything; they re-freeze through the usual settle path.
+      // Stir the surface so the room does not look embalmed on return. Waking
+      // alone would do nothing visible — a settled word is in equilibrium, so
+      // it would simply re-freeze having not moved — which is why `stir` shoves
+      // as well as wakes. They re-freeze through the usual settle path.
       const surface = physics.surfaceBodies(FOCUS_NUDGE_BODIES);
-      for (const body of surface) physics.wake(body.id);
+      for (const body of surface) physics.stir(body.id);
       debug("room", `visible: ${String(surface.length)} surface words stirred`);
     },
 

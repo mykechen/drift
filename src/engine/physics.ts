@@ -245,6 +245,16 @@ const CRUSH_RADIUS_PER_MASS = 1.6;
  */
 const SURFACE_SPAN_UNITS = 0.7;
 
+/**
+ * How hard the focus nudge shoves a surface word, in units per second.
+ *
+ * Small enough that the pile gives rather than jumps — DESIGN.md says "a small
+ * impulse ... so they don't look frozen", and a room that visibly rearranges
+ * itself every time a tab regains focus would be worse than one that sits
+ * still.
+ */
+const STIR_IMPULSE_UNITS_PER_S = 0.35;
+
 /** Shortest signed angle from `angle` to upright (0), in (−π, π]. */
 function wrapToPi(angle: number): number {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
@@ -364,8 +374,16 @@ export interface PhysicsRoom {
    * slumping sediment that has no business moving.
    */
   surfaceBodies(limit: number): WordBody[];
-  /** Turn one frozen word back to dynamic. A no-op if it is already awake. */
-  wake(id: number): void;
+  /**
+   * Wake one word and give it a small shove, so the pile visibly gives.
+   *
+   * Waking alone is not enough and that is worth stating: a settled word is in
+   * equilibrium, so turning it back to dynamic produces no motion at all — it
+   * simply re-freezes a second and a half later having done nothing. The
+   * impulse is what makes the gesture observable, which is the entire point of
+   * DESIGN.md asking for one.
+   */
+  stir(id: number): void;
   /** Remove every body. */
   clear(): void;
 }
@@ -834,9 +852,23 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       return surface.slice(0, limit);
     },
 
-    wake(id: number): void {
+    stir(id: number): void {
       const wordBody = bodies.find((candidate) => candidate.id === id);
-      if (wordBody?.frozen) wakeBody(wordBody);
+      if (!wordBody) return;
+      if (wordBody.frozen) wakeBody(wordBody);
+      const body = handles.get(id);
+      if (!body) return;
+      // Upward and slightly sideways, phased by id so a whole surface does not
+      // twitch in unison. Scaled by mass so heavy and light words move by
+      // comparable amounts rather than the feathers flying off.
+      const sway = Math.sin(id * 2.399) * STIR_IMPULSE_UNITS_PER_S;
+      body.applyImpulse(
+        {
+          x: sway * body.mass(),
+          y: STIR_IMPULSE_UNITS_PER_S * body.mass(),
+        },
+        true,
+      );
     },
 
     drainCrushed(): number[] {
