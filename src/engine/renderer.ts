@@ -36,6 +36,16 @@ import {
 } from "../design/typography";
 import type { WordOutline, WordPath } from "./glyphs";
 import type { WordBody } from "./physics";
+import {
+  FIRE_FLICKER_AMOUNT,
+  FIRE_FLICKER_HZ,
+  MATERIAL_FIRE,
+  MATERIAL_NONE,
+  materialFor,
+  WATER_RIPPLE_AMOUNT,
+  WATER_RIPPLE_HZ,
+  WATER_RIPPLE_WAVES,
+} from "../design/materials";
 import { createSdfBaker, SPREAD_EM, type SdfField } from "./sdf";
 import { debug } from "../util/debug";
 
@@ -186,19 +196,71 @@ const FRAGMENT_SHADER = /* glsl */ `
   // shadow is a property of the light.
   uniform float uErode;
   uniform float uWear;
+  // Animated materials, under test on exactly two words. 0 none, 1 fire,
+  // 2 water. See src/design/materials.ts for why this is an experiment and not
+  // a feature.
+  uniform float uMaterial;
+  uniform float uTime;
+  uniform float uFlicker;
+  uniform float uRipple;
+  uniform float uRippleWaves;
 
   varying vec2 vUv;
 
+  // Cheap value noise. Two hashes and a bilinear blend is enough for a flame
+  // edge and costs a fraction of a gradient noise nobody would be able to tell
+  // it from at this amplitude.
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+
+  float valueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+
   void main() {
-    float distance = texture2D(uField, vUv).r;
+    vec2 uv = vUv;
+    float erode = uErode;
+    vec3 ink = uInk;
+
+    // Water displaces where the field is *sampled*, so the letterform itself
+    // appears to run rather than its edge being chewed. Vertical displacement
+    // driven by a horizontal travelling wave, which is what reads as a surface
+    // rather than as a wobble.
+    if (uMaterial > 1.5) {
+      uv.y += sin(uv.x * uRippleWaves + uTime) * uRipple;
+    }
+
+    float distance = texture2D(uField, uv).r;
+
+    // Fire moves the threshold instead, which is the same knob age uses to
+    // erode a word — so the edge burns back and forward unevenly while the
+    // interior stays solid. Noise rises through the glyph over time, so the
+    // flicker travels upward the way a flame does.
+    if (uMaterial > 0.5 && uMaterial < 1.5) {
+      float n = valueNoise(vec2(uv.x * 7.0, uv.y * 4.0 - uTime));
+      erode += (n - 0.5) * uFlicker;
+      // Hotter where the field says the edge is: the fringe of the letter
+      // glows, the body of it stays ink.
+      float fringe = 1.0 - smoothstep(0.5, 0.72, distance);
+      ink = mix(ink, ink * vec3(1.9, 1.25, 0.6), fringe * n * 0.75);
+    }
+
     // Pushing the threshold *up* eats into the letter: a texel now has to be
     // deeper inside the glyph to count as ink.
     float soft = uEdgeSoftness * (1.0 + uWear);
-    float lower = uBlur > 0.0 ? 0.5 - 2.0 * uBlur : 0.5 + uErode - soft;
-    float upper = uBlur > 0.0 ? 0.5 : 0.5 + uErode + soft;
+    float lower = uBlur > 0.0 ? 0.5 - 2.0 * uBlur : 0.5 + erode - soft;
+    float upper = uBlur > 0.0 ? 0.5 : 0.5 + erode + soft;
     float coverage = smoothstep(lower, upper, distance);
     if (coverage <= 0.0) discard;
-    gl_FragColor = vec4(uInk, uAlpha * coverage);
+    gl_FragColor = vec4(ink, uAlpha * coverage);
   }
 `;
 
@@ -429,6 +491,23 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       rotation: number;
     }
   >();
+  /**
+   * Words with an animated fill, and which one. Under test on two words; see
+   * `src/design/materials.ts`.
+   *
+   * A map rather than a flag on `WordMeshes` because `render` needs to walk
+   * *only* these — writing a time uniform to two hundred meshes every frame to
+   * animate two of them is the kind of cost that hides until a full room.
+   */
+  const animating = new Map<number, { mesh: Mesh; material: number }>();
+  /**
+   * Seconds of animation, accumulated on the **fixed timestep** rather than
+   * read from the wall clock — so a flame looks the same on a 60Hz laptop and a
+   * 144Hz monitor, and freezes when the loop pauses on a hidden tab, exactly
+   * like the physics and the springs.
+   */
+  let materialSeconds = 0;
+
   /** The word being typed. One at a time, replaced wholesale on each keystroke. */
   let draft: WordMeshes | null = null;
   /**
@@ -617,6 +696,15 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           uBlur: { value: 0 },
           uErode: { value: 0 },
           uWear: { value: 0 },
+          // Animated materials, under test. Zero on everything but the two
+          // words in src/design/materials.ts, and on every shadow — a burning
+          // word does not cast a burning shadow, for the same reason a worn one
+          // does not cast a worn shadow.
+          uMaterial: { value: MATERIAL_NONE },
+          uTime: { value: 0 },
+          uFlicker: { value: FIRE_FLICKER_AMOUNT },
+          uRipple: { value: WATER_RIPPLE_AMOUNT },
+          uRippleWaves: { value: WATER_RIPPLE_WAVES },
         },
       }),
     });
@@ -757,6 +845,17 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     );
     if (!pair) return;
     meshes.set(body.id, pair);
+
+    // Only the ink. A burning word does not cast a burning shadow, for the same
+    // reason a worn one does not cast a worn shadow: the material belongs to
+    // the ink on the paper and the shadow belongs to the light.
+    const material = materialFor(body.word);
+    if (material !== MATERIAL_NONE) {
+      (pair.ink.program.uniforms["uMaterial"] as { value: number }).value =
+        material;
+      animating.set(body.id, { mesh: pair.ink, material });
+    }
+
     committing.set(
       body.id,
       createSpring(COMMIT_SPRING, COMMIT_SCALE_FROM, COMMIT_SCALE_TO),
@@ -794,6 +893,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     const pair = meshes.get(id);
     if (!pair) return;
     meshes.delete(id);
+    animating.delete(id);
     // A word crushed mid-arrival stops arriving. Without this its spring keeps
     // stepping against a mesh the crush animation now owns, and the two fight
     // over `uScale`.
@@ -809,6 +909,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     if (!pair) return;
     meshes.delete(id);
     committing.delete(id);
+    animating.delete(id);
 
     // Where the word was standing, read back from the transform the last frame
     // gave it. There is no body to ask any more — physics released it before
@@ -837,6 +938,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   }
 
   function step(fixedDeltaMs: number): void {
+    materialSeconds += fixedDeltaMs / 1000;
     if (committing.size === 0) return;
     for (const [id, spring] of committing) {
       stepSpring(spring, fixedDeltaMs);
@@ -848,6 +950,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     for (const pair of meshes.values()) detach(pair);
     meshes.clear();
     committing.clear();
+    animating.clear();
     for (const entry of crushing.values()) detach(entry.meshes);
     crushing.clear();
     for (const entry of fading.values()) detach(entry.meshes);
@@ -969,6 +1072,18 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
           (pair.shadow.program.uniforms["uBlur"] as { value: number }).value =
             pair.blurTarget * arrival;
         }
+      }
+
+      // Only the words under test, and only their ink. Fire scrolls its noise
+      // upward through the glyph; water travels a wave along it, so the two
+      // want their own rates rather than one shared clock.
+      for (const entry of animating.values()) {
+        const rate =
+          entry.material === MATERIAL_FIRE
+            ? materialSeconds * FIRE_FLICKER_HZ
+            : materialSeconds * WATER_RIPPLE_HZ * 2 * Math.PI;
+        (entry.mesh.program.uniforms["uTime"] as { value: number }).value =
+          rate;
       }
 
       if (fading.size > 0) {
