@@ -1913,3 +1913,127 @@ survives a no. You can turn `asdfgh` into `ash` by backspacing.
 Letters are refused at the keystroke rather than at the commit, for the same
 reason: there is nothing to be gained by letting a digit appear and then refusing
 the whole word for containing it.
+
+---
+
+## Liveliness and touch — the room was dead, and the reason was a stale number
+
+The author used the finished Phase 3 room and said it feels dead. The diagnosis
+was right and it was structural rather than aesthetic: every settled word is a
+Rapier `Fixed` body, nothing moves unless you type, and the pointer cannot touch
+anything. Measured on a settled 150-word room, **150 of 150 frozen**.
+
+The agreed direction is to make liveliness a *property, like mass*. The piece's
+thesis is that meaning becomes physics, and today that only applies to falling.
+
+### The measurement that unlocked everything, and why it had gone stale
+
+Phase 2 converted settled words to static bodies because a 200-word awake room
+cost **72ms** a step. That single number is the entire justification for the
+mechanic, and every decision since has deferred to it.
+
+It is stale, and the reason is that *the fixes it prompted invalidated it*. The
+72ms reading is what led to sizing words down from `WORD_EM_UNITS` 0.9 to 0.4 —
+a room that could not hold its own soft cap stays permanently pressurised — and
+to narrowing the density range from 40:1 to 5:1. Both landed, and nobody went
+back to re-take the measurement that asked for them.
+
+Re-measured through the throttled Playwright driver, filling at a human pace:
+
+| Room state | bodies | awake | colliders | step p50 | p95 | max |
+| --- | --- | --- | --- | --- | --- | --- |
+| Settled today, as it ships | 150 | **0** | 5,072 | 0.4ms | 0.5ms | 0.5ms |
+| The same room, everything awake | 150 | 150 | 5,072 | 1.8ms | 2.1ms | 2.5ms |
+| **At the 200 soft cap, everything awake** | **200** | **200** | 6,821 | **2.8ms** | **3.3ms** | **3.6ms** |
+
+**Freezing is buying 2.4ms in a room with 13ms of headroom.** A permanently
+awake room at the hard cap sits at 17% of budget, and a throttled reading under
+budget is sufficient proof because throttling only ever inflates.
+
+**Lesson for the writeup, and it is the sharpest one in the project so far:** a
+measurement justifies a mechanic, the mechanic's own fixes change the thing
+being measured, and the number is never re-taken. It then sits in a comment for
+three phases being cited as a reason. The 72ms was true when it was written and
+wrong within the same phase. *Re-measure the number a decision rests on when you
+change what it was measuring.*
+
+### Words land where the pointer is, in both axes
+
+The cursor followed the mouse in x only and every word spawned at the room's
+centre height. A room composed along a line is a shelf rather than a space.
+
+Full height, no vertical clamp beyond the frame. Placing low is *setting a word
+down* rather than dropping it, which is a gesture worth having, and feel test 1
+survives because that test drops both words from the same height — which is what
+anyone comparing two words does.
+
+**This made DESIGN.md's unimplemented safe zone necessary rather than nice.**
+Aiming into a pile puts a compound body inside other compound bodies and the
+solver's only answer is to eject one at speed. It ships as a **lift, not a
+circle**, and the asymmetry is the design: x is the axis the visitor chose and is
+kept to the digit, y is the axis the pile occupies and is the only one corrected.
+Extents come from each body's *rotated* bounding box, because a leaning word
+sticks up by exactly the amount the safe zone exists to clear.
+
+The part that makes it a design decision rather than a bug fix: **the draft
+renders at the corrected height.** The caret visibly climbs the sediment as the
+pointer sweeps across it, so the pile has presence before you commit anything to
+it, and a word never silently teleports on commit. Measured: aiming 1.5 units
+deep into an eight-word heap releases 0.06 above its surface; an empty column is
+untouched exactly.
+
+### Grab and throw, and the square root that nearly hid the whole point
+
+Three decisions carry the feel.
+
+**The pick is a projection with a radius, not a containment test.** A glyph is
+mostly counters and gaps between letters, so clicking the middle of an `o` or
+between `t` and `h` would miss — and a piece with no hover state gives the
+visitor nothing to correct against. `projectPoint` turns "did I hit it" into
+"how close was I", which is the answerable question.
+
+**The spring pulls at the grip, stored in the body's own frame**, so a word held
+by one corner hangs and swings from it instead of sliding rigidly under the
+pointer. Damping is against the *grip's* velocity rather than the body's; damping
+the body would leave a corner-held word free to spin, because the spin is
+invisible at the centre of mass.
+
+**The stiffness gap had to be far larger than it looked.** The impulse is scaled
+by the body's mass, making it an acceleration drive, so the gain has to come from
+the mass *score* or every word moves identically. The first values — 900 at the
+light end, 260 at the heavy — are a 3.5:1 ratio and measured **1.8:1** of actual
+lag, which read as nothing at all. The arithmetic says why: a damped spring
+following the pointer at a steady speed settles at a lag of `2ζv/√k`, so felt
+weight goes as the **square root** of the gap. 9:1 buys the ~3:1 that can be
+felt.
+
+**Release just stops the spring.** No captured pointer trail and no injected
+throw velocity — a heavy word lagged behind your hand while it was held, so it
+also leaves your hand slower. *The lag is the weight*, and replacing it with the
+pointer's own speed would flatten the one distinction the piece exists to make.
+
+Measured over an identical pointer path for every word:
+
+| word | mass | lag behind pointer | flew after release |
+| --- | --- | --- | --- |
+| feather | −0.60 | 0.53 | 2.32 |
+| paper | −0.50 | 0.54 | 3.06 |
+| stone | +0.49 | 0.89 | 6.67 |
+| boulder | +0.87 | **1.40** | **8.15** |
+
+The 3.5:1 spread in throw distance is **emergent, not added**: it is the existing
+damping model arresting a thrown feather in mid-air while a boulder keeps its
+momentum. Nothing was written to produce it.
+
+A held word does not freeze and cannot be crushed — the hand is the one place the
+visitor is in charge — but it can still *crush*, and a swung `boulder` took 3 of
+5 light words out of a bed. Grabbing wakes the sediment around it so the pile
+falls into the space, reusing the crush's existing `wakeAround`.
+
+**Two test bugs worth recording, because both looked like findings.** A swung
+boulder first reported crushing 0 of 5 — the sweep ran at y = 1.5 while the light
+words had settled at y = −4.8, so it passed through empty air. And a held word
+reported as "gone" after release: correct behaviour, not a leak, because the
+`mountain` parked on top of it while it was held flattened it the instant the
+hand let go. *Measure the room a person would make* applies to the pointer as
+much as to the keyboard.
