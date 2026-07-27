@@ -2037,3 +2037,81 @@ reported as "gone" after release: correct behaviour, not a leak, because the
 `mountain` parked on top of it while it was held flattened it the instant the
 hand let go. *Measure the room a person would make* applies to the pointer as
 much as to the keyboard.
+
+### Liveliness replaces the freeze, and the deadness turns out to have two halves
+
+`liveliness = (1 − mass)/2 + intensity × 0.25`, computed once at commit and
+stored on the body as a first-class property beside `scores`. Above 0.5 a word
+never freezes at all; below it the freeze delay scales from four seconds down to
+four hundred milliseconds. Sediment still forms — it now forms at a rate that
+means something, where Phase 2 turned a feather and a mountain to stone on the
+same 1500ms schedule.
+
+The breath is **one shared field phased by position**, so it crosses the room as
+a slow broad wave rather than as two hundred oscillators that happen to share a
+frequency. That is the difference between a room that has air and a room full of
+independently restless objects, and it is also stable: a word's phase does not
+jump when the room around it changes.
+
+**It is primarily a torque, and that is physics rather than taste.** Sliding a
+resting word means beating friction, which at `FRICTION` 0.85 needs an
+acceleration of roughly `0.85 × 9.81` — comparable to gravity. That is a gale,
+not a breath, and a sustained lateral force on a whole pile risks making it walk,
+since friction resists but never restores. Rocking costs almost nothing and is
+**bounded for free**: the righting torque's 8° deadband is exactly the band
+inside which nothing restores, so a word breathes within it and is pushed back
+the moment it leaves. The mechanism that keeps words readable is the same one
+that keeps the breath from becoming a drift.
+
+#### The finding: removing the freeze is not enough to keep a word alive
+
+The first measurement came back with the freeze split landing perfectly on the
+threshold — and **0.000 units of movement for every word**, including the ones
+that now never freeze.
+
+Rapier puts a settled *dynamic* body to sleep on its own, and **a sleeping body
+silently discards an impulse applied with `wakeUp: false`.** Confirmed rather
+than guessed: a `cloud` ten seconds after landing reported `frozen: false,
+asleep: true`. The freeze mechanism was only the half of the deadness that was
+documented; island sleeping was underneath it the whole time, ready to produce an
+identically dead room by a different route. `wakeUp: true` is therefore not a
+detail of the breath, it *is* the breath.
+
+The `false` was copied from leaf drift, where it is correct — leaf drift only
+ever acts on a *falling* word, and a falling word is never asleep. The flag was
+right in its original context and silently wrong two hundred lines away.
+
+#### A lone word on bare floor still cannot move, and that is correct
+
+Worth recording because it looked like the fix had failed. A single word lying
+flat on the flat floor measures zero motion, and the arithmetic says it should:
+tipping it requires torque above `m·g·a` ≈ 0.54, where the breath peaks around
+0.053 — a factor of ten. It is pinned by its own weight. Contact with neighbours
+is what unlocks the rocking, which is why the single-word test was misleading and
+the room test was not.
+
+*Measure the room a person would make.* The lesson keeps arriving in new
+costumes: first as an instantaneous 199-word fill, then as a boulder swung
+through empty air, now as a word tested in the one configuration the piece almost
+never produces.
+
+#### Where it landed
+
+On 40 light words placed across the floor at a human pace:
+
+| | |
+| --- | --- |
+| frozen / asleep | **0 / 0** |
+| visibly moving | **31 of 40** |
+| top sway | 0.27 units, about ⅔ of a word's height |
+| top rock | 31°, on a word stacked at an angle |
+| **centroid drift over 10s** | **0.011 units** — it sways, it does not creep |
+
+Stacked words move more than floor words (18 of 20 against 13 of 20), exactly as
+the pinning argument predicts.
+
+Nothing regressed. Feel test 1 measures **895ms / 2420ms** against a baseline of
+885 / 2374. A heavy room still reaches 20/20 frozen. And the worst case the piece
+can now produce — 200 never-freezing light words, all breathing, 6,992 colliders,
+nothing frozen and nothing asleep — steps at **2.7ms p50 / 3.3ms max against
+16.7ms**, through the throttled driver.
