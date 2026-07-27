@@ -1762,3 +1762,49 @@ The tint is recomputed on a minute tick and the *same object* is handed back in
 between, which is what lets the renderer decide by identity whether the room's
 light has moved — so two hundred words are relit once a minute rather than every
 frame.
+
+### Phase 3 — the numbers, re-measured
+
+Everything on the must-not-regress list, plus the two performance figures this
+phase could plausibly have moved.
+
+| | baseline | now |
+| --- | --- | --- |
+| Inference p50 / p95 | 0.10 / 0.80ms | under timer resolution, max 0.5ms |
+| Feel test 1 — boulder to floor | ~900ms | **885ms** |
+| Feel test 1 — feather to floor | ~2450ms | **2374ms** |
+| Commit (inference + hulls + SDF bake), 40 distinct words | 4.7ms p50 | **3.9ms p50 / 5.3 p95 / 7.4 max** |
+| Step, room filling, 132 bodies / 4906 colliders | 6.2ms p50 @199 awake | **1.7ms p50 / 2.0 p95** |
+| Frame, step + springs + render, same room | 11.3ms p50 @166 words | **2.3ms p50 / 2.6 p95** |
+| Cold desktop | 3174.1 KB | **3193.7 KB** |
+| Cold mobile | 21.6 KB | **35.7 KB** |
+
+Mobile grew for one reason and it is the grain: the fallback still is a capture
+of the real room, and 2% procedural noise is close to incompressible. The old
+20.6 KB image predates it. Lossless WebP came out at **399 KB**; the shipped
+still is 880×660 at quality 85, which is 30.5 KB. The rest of the increase is
+the mono subset at 3.7 KB. Desktop's figure now over-counts by both the fallback
+image and the font — neither is requested on that route until the footer lands
+in Phase 4/7.
+
+**A measurement trap worth recording, because it produced a fake 7× regression.**
+Committing 199 words in a tight loop reports a **44ms** step. Committing the same
+199 words at a human pace reports **1.7ms**. The difference is not the room, it
+is that every word spawns at the cursor's height and an instantaneous fill leaves
+199 bodies interpenetrating at one point — a solver state no visitor can create.
+The first reading looked exactly like a real finding. *Measure the room a person
+would make.*
+
+Related, and a real limit rather than an artefact: with light words the room
+accumulates cleanly to about 130, and past that the pile reaches the spawn height
+and new words start arriving inside it. That is what DESIGN.md's unimplemented
+"safe zone around cursor" is for, and it is the practical ceiling on density
+independently of the crush.
+
+**Feel test #4.** Two minutes of mixed typing is 78 commits and settles to 27
+bodies — the crush doing what the author decided it should. The still is
+`docs/images/phase3-room.png`: sediment banked along the bottom of a mostly empty
+page, tilts organic, semantic tint legible on inspection (`marble` and `crimson`
+cooler, `amber` and `dusk` warmer) and invisible at a glance. Whether that is a
+composition worth hanging is the author's call, and it is the one thing in this
+phase that cannot be settled by measuring.
