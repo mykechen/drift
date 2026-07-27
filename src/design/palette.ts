@@ -65,6 +65,60 @@ function channel(hex: string, index: number): number {
  */
 const WARMTH_GAIN = 2;
 
+// --- Ink as material --------------------------------------------------------
+
+/**
+ * Ink is built in HSL rather than interpolated between two hex values, and the
+ * reason is perceptual rather than tidiness: **you cannot have a saturated
+ * dark.**
+ *
+ * `INK_WARMEST` (`#3A2418`) carries 43% saturation on paper, but at 15%
+ * lightness there is almost no room for chroma to live in, so it reads as a
+ * dark brown-grey rather than as a warm material. Rotating hue at fixed
+ * lightness cannot fix that — the fix is that a strongly-coloured word must
+ * also sit *lighter* than neutral ink. So warmth drives hue, saturation and
+ * lightness together, which is what turns a tint into a material.
+ *
+ * `INK` itself measures hue 20°, saturation 0.06, lightness 0.096 — already a
+ * warm near-black sitting almost exactly on the warm hue. So the warm direction
+ * is not a rotation at all; it is the same hue gaining chroma and light. Only
+ * the cool direction rotates.
+ */
+const INK_HUE_WARMEST = 22;
+const INK_HUE_COOLEST = 208;
+
+/** `INK`'s own saturation and lightness — where every neutral word lands. */
+const INK_SATURATION_NEUTRAL = 0.06;
+const INK_LIGHTNESS_NEUTRAL = 0.096;
+
+/** Where a word at the far end of the warmth range lands. */
+const INK_SATURATION_EXTREME = 0.62;
+const INK_LIGHTNESS_EXTREME = 0.28;
+
+/**
+ * How sharply colour arrives across the warmth range. Above 1 it eases in, so
+ * the mid-range stays close to ink and only genuinely warm or cool words take
+ * on real material.
+ *
+ * This is *not* the mistake Phase 3 corrected. That was a linear map across a
+ * range the data never occupied, so the endpoints were unreachable; these
+ * endpoints are reached at warmth ±0.5, which the distribution does reach. The
+ * curve shapes *which* words are coloured, not whether any are — and most words
+ * should be near-ink, because most materials are muted and only some are vivid.
+ */
+const INK_COLOUR_CURVE = 1.7;
+
+/**
+ * How much `intensity` pushes a word's colour vividness either way, so a loud
+ * word is more saturated and a quiet one more muted *at the same darkness*.
+ *
+ * Saturation only, deliberately. Letting intensity touch lightness as well
+ * would put it in direct conflict with `age`, which fades a word toward the
+ * paper — a loud old word and a quiet new one would become impossible to tell
+ * apart.
+ */
+const INK_VIVIDNESS_FROM_INTENSITY = 0.25;
+
 /**
  * How much of its ink an old word gives up to the paper.
  *
@@ -103,25 +157,36 @@ export function inkForWarmth(
   warmth: number,
   tint?: RoomTint,
   age = 0,
+  intensity = 0,
 ): [number, number, number] {
   const clamped = Math.max(-1, Math.min(1, warmth * WARMTH_GAIN));
-  const from = clamped < 0 ? INK_COOLEST : INK;
-  const to = clamped < 0 ? INK : INK_WARMEST;
-  const t = clamped < 0 ? clamped + 1 : clamped;
+  // How far from neutral ink this word's material sits, eased so the mid-range
+  // stays near-ink and only the ends take on real colour.
+  const strength = Math.pow(Math.abs(clamped), INK_COLOUR_CURVE);
 
-  const rgb: [number, number, number] = [
-    channel(from, 0) + (channel(to, 0) - channel(from, 0)) * t,
-    channel(from, 1) + (channel(to, 1) - channel(from, 1)) * t,
-    channel(from, 2) + (channel(to, 2) - channel(from, 2)) * t,
-  ];
+  // The hue *choice* jumps at warmth 0, and that is invisible rather than a
+  // seam: strength is 0 there, so both hues resolve to exactly `INK`. This is
+  // what preserves DESIGN.md's promise that a neutral word lands on `INK`.
+  const hue = clamped < 0 ? INK_HUE_COOLEST : INK_HUE_WARMEST;
 
-  const shifted: [number, number, number] = tint
-    ? toRgb(
-        toHsl(rgb)[0] + tint.inkHueShift,
-        toHsl(rgb)[1],
-        toHsl(rgb)[2] + tint.inkLightnessLift,
-      )
-    : rgb;
+  const vividness =
+    1 + Math.max(-1, Math.min(1, intensity)) * INK_VIVIDNESS_FROM_INTENSITY;
+  const saturation =
+    (INK_SATURATION_NEUTRAL +
+      strength * (INK_SATURATION_EXTREME - INK_SATURATION_NEUTRAL)) *
+    vividness;
+  const lightness =
+    INK_LIGHTNESS_NEUTRAL +
+    strength * (INK_LIGHTNESS_EXTREME - INK_LIGHTNESS_NEUTRAL);
+
+  // Built in HSL and converted once, rather than converted out and back to
+  // apply the hour's shift — the tint is a hue rotation and a lightness lift,
+  // which are the coordinates this is already working in.
+  const shifted: [number, number, number] = toRgb(
+    hue + (tint?.inkHueShift ?? 0),
+    saturation,
+    lightness + (tint?.inkLightnessLift ?? 0),
+  );
 
   // Age fades the word toward the paper it sits on — a no-op on everything the
   // model rates neutral or modern, which is most of the room.

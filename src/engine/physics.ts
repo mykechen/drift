@@ -628,7 +628,19 @@ export interface PhysicsRoom {
    * DESIGN.md asking for one.
    */
   stir(id: number): void;
-  /** Remove every body. */
+  /**
+   * Remove every body from the simulation.
+   *
+   * **Not a room-level clear, and not what `Cmd/Ctrl+K` calls.** This drops the
+   * bodies and nothing else, so the renderer is left holding meshes for words
+   * that no longer exist — and because those meshes are still parented into the
+   * scene, they keep drawing at whatever transform they last had. The room's
+   * `clear()` in `world/room.ts` is the one to use: it retires each word through
+   * `remove` + `renderer.fade`, which is also what makes the gesture visible.
+   *
+   * Kept public for the dev console and for teardown. Pair it with
+   * `renderer.detachAll()` if you call it directly.
+   */
   clear(): void;
 }
 

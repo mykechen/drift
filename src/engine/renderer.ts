@@ -56,6 +56,8 @@ interface WordMeshes {
    */
   readonly warmth: number;
   readonly age: number;
+  /** Feeds the ink too: intensity sets how vivid the word's material is. */
+  readonly intensity: number;
   /**
    * Where the shadow's blur and drop end up. The commit spring grows both from
    * nothing, so the settled values have to be remembered rather than written
@@ -634,13 +636,14 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     mass: number,
     warmth: number,
     age: number,
+    intensity: number,
     castsShadow: boolean,
   ): WordMeshes | null {
     const inkMesh = buildMesh(path, emWidth, emHeight);
     if (!inkMesh) return null;
 
     (inkMesh.program.uniforms["uInk"] as { value: number[] }).value =
-      inkForWarmth(warmth, currentTint ?? undefined, age);
+      inkForWarmth(warmth, currentTint ?? undefined, age, intensity);
     // Wear is written once — `age` never changes for a committed word, unlike
     // the tint, which is why this needs no per-frame refresh.
     const wear = wearForAge(age);
@@ -655,6 +658,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       shadow: null,
       warmth,
       age,
+      intensity,
       blurTarget: 0,
       dropTarget: 0,
     };
@@ -688,6 +692,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       shadow: shadowMesh,
       warmth,
       age,
+      intensity,
       blurTarget,
       dropTarget: shadowDropFor(mass),
     };
@@ -702,19 +707,29 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   function relightInk(tint: RoomTint): void {
     for (const pair of meshes.values()) {
       (pair.ink.program.uniforms["uInk"] as { value: number[] }).value =
-        inkForWarmth(pair.warmth, tint, pair.age);
+        inkForWarmth(pair.warmth, tint, pair.age, pair.intensity);
     }
     for (const entry of crushing.values()) {
       (entry.meshes.ink.program.uniforms["uInk"] as { value: number[] }).value =
-        inkForWarmth(entry.meshes.warmth, tint, entry.meshes.age);
+        inkForWarmth(
+          entry.meshes.warmth,
+          tint,
+          entry.meshes.age,
+          entry.meshes.intensity,
+        );
     }
     for (const entry of fading.values()) {
       (entry.meshes.ink.program.uniforms["uInk"] as { value: number[] }).value =
-        inkForWarmth(entry.meshes.warmth, tint, entry.meshes.age);
+        inkForWarmth(
+          entry.meshes.warmth,
+          tint,
+          entry.meshes.age,
+          entry.meshes.intensity,
+        );
     }
     if (draft) {
       (draft.ink.program.uniforms["uInk"] as { value: number[] }).value =
-        inkForWarmth(draft.warmth, tint, draft.age);
+        inkForWarmth(draft.warmth, tint, draft.age, draft.intensity);
     }
   }
 
@@ -737,6 +752,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       body.scores.mass,
       body.scores.warmth,
       body.scores.age,
+      body.scores.intensity,
       true,
     );
     if (!pair) return;
@@ -765,6 +781,7 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       outline.path,
       outline.width,
       outline.height,
+      0,
       0,
       0,
       0,
