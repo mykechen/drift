@@ -8,6 +8,7 @@ import {
   Transform,
 } from "ogl";
 import {
+  ACCENT_CURSOR,
   BACKGROUND,
   inkForWarmth,
   SHADOW_BLUR_EM_HEAVIEST,
@@ -126,6 +127,55 @@ const FRAGMENT_SHADER = /* glsl */ `
 `;
 
 /**
+ * The caret: a plain rectangle in the accent, and the only accent-coloured
+ * thing in the piece.
+ *
+ * Its own program rather than the word one with a blank field — it has no
+ * texture, no distance function and no edge to soften, and giving it the word
+ * shader would mean binding a texture every frame to sample a value it ignores.
+ */
+const CURSOR_VERTEX_SHADER = /* glsl */ `
+  attribute vec2 position;
+
+  uniform vec2 uTranslation;
+  uniform vec2 uSize;
+  uniform vec2 uRoomHalfExtent;
+
+  void main() {
+    vec2 world = position * uSize + uTranslation;
+    gl_Position = vec4(world / uRoomHalfExtent, 0.0, 1.0);
+  }
+`;
+
+const CURSOR_FRAGMENT_SHADER = /* glsl */ `
+  precision mediump float;
+
+  uniform vec3 uColour;
+  uniform float uAlpha;
+
+  void main() {
+    gl_FragColor = vec4(uColour, uAlpha);
+  }
+`;
+
+/** Caret proportions, in em, so it scales with the words rather than the screen. */
+const CURSOR_HEIGHT_EM = 0.72;
+const CURSOR_WIDTH_EM = 0.055;
+
+/**
+ * Clearance between the last letter and the caret, in em.
+ *
+ * Without it the caret's left half overlaps the word's bounding box and touches
+ * the final glyph, which reads as a stray stroke rather than as a caret.
+ */
+const CURSOR_GAP_EM = 0.09;
+
+/** DESIGN.md: 2s cycle, sine, opacity 60% → 100%. Never off. */
+const CURSOR_PULSE_PERIOD_MS = 2000;
+const CURSOR_ALPHA_MIN = 0.6;
+const CURSOR_ALPHA_MAX = 1;
+
+/**
  * Members are typed as function properties rather than methods because they are
  * closures with no `this` — they stay correct when passed as bare event
  * listeners.
@@ -151,6 +201,14 @@ export interface RoomRenderer {
    * no live mesh.
    */
   readonly crush: (id: number) => void;
+  /**
+   * Freeze or resume the caret's pulse.
+   *
+   * Per DESIGN.md the pulse stops when the window loses focus. It freezes at
+   * whatever opacity it had rather than snapping to full — a caret that jumped
+   * to solid on blur would draw the eye to the window you just left.
+   */
+  readonly setPulsePaused: (paused: boolean) => void;
   /** Drop every mesh, committed and draft. */
   readonly detachAll: () => void;
   /** Re-reads the canvas's CSS size and resizes the drawing buffer to match. */
@@ -206,8 +264,19 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   const background = createBackground(gl, scene);
   const shadowLayer = new Transform();
   const inkLayer = new Transform();
+  /**
+   * The caret gets a third layer, above the ink, and it needs one.
+   *
+   * Parented into `inkLayer` it drew *before* every word — OGL keeps equal-depth
+   * transparent meshes in traversal order, and the caret is created once at
+   * startup while words are appended as they commit. Measured, the draft word
+   * painted over it: 200 accent pixels fell to 22 as soon as anything was being
+   * typed. A caret that the text can bury is not a caret.
+   */
+  const cursorLayer = new Transform();
   shadowLayer.setParent(scene);
   inkLayer.setParent(scene);
+  cursorLayer.setParent(scene);
 
   /**
    * The tint the ink uniforms were last written at.
@@ -228,6 +297,46 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
   const crushing = new Map<number, { meshes: WordMeshes; startMs: number }>();
   /** The word being typed. One at a time, replaced wholesale on each keystroke. */
   let draft: WordMeshes | null = null;
+  /**
+   * How wide the draft is, in em. The caret rides its right edge, so this is
+   * the one thing about the draft the cursor needs to know.
+   */
+  let draftWidthEm = 0;
+
+  const accent = new Color(ACCENT_CURSOR);
+  const cursorMesh = new Mesh(gl, {
+    geometry: new Geometry(gl, {
+      position: {
+        size: 2,
+        data: new Float32Array([
+          -0.5, 0.5, 0.5, 0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, -0.5, -0.5,
+        ]),
+      },
+    }),
+    program: new Program(gl, {
+      vertex: CURSOR_VERTEX_SHADER,
+      fragment: CURSOR_FRAGMENT_SHADER,
+      transparent: true,
+      cullFace: false,
+      uniforms: {
+        uTranslation: { value: [0, 0] },
+        uSize: { value: [1, 1] },
+        uRoomHalfExtent: { value: [1, 1] },
+        uColour: { value: [accent.r, accent.g, accent.b] },
+        uAlpha: { value: CURSOR_ALPHA_MAX },
+      },
+    }),
+  });
+  cursorMesh.setParent(cursorLayer);
+
+  /**
+   * Pulse phase, carried across frames rather than read from `performance.now()`
+   * directly, so that pausing freezes the caret where it is instead of letting
+   * the clock run on underneath and jumping when it resumes.
+   */
+  let pulseMs = 0;
+  let pulsePaused = false;
+  let lastPulseSampleMs = performance.now();
 
   /**
    * OGL's `setSize` writes inline `width`/`height` pixel styles onto the canvas
@@ -468,11 +577,15 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
       detach(draft);
       draft = null;
     }
-    if (!outline) return;
+    if (!outline) {
+      draftWidthEm = 0;
+      return;
+    }
     // The uncommitted word renders at neutral axes, so it gets neutral ink —
     // the model's opinion arrives on commit, and that includes its opinion
     // about colour. No shadow, per DESIGN.md.
     draft = buildWord(outline.path, outline.width, outline.height, 0, 0, false);
+    draftWidthEm = outline.width;
   }
 
   function crush(id: number): void {
@@ -507,6 +620,13 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
     attach,
     setDraft,
     crush,
+    setPulsePaused(paused: boolean): void {
+      // Resample the clock on resume so the time spent paused is not counted as
+      // pulse phase; without this the caret jumps to wherever the sine would
+      // have been had it kept running.
+      if (pulsePaused && !paused) lastPulseSampleMs = performance.now();
+      pulsePaused = paused;
+    },
     detachAll,
     resize,
     render(
@@ -619,6 +739,44 @@ export function createRoomRenderer(canvas: HTMLCanvasElement): RoomRenderer {
         // rather than growing rightward from a caret, so it sits exactly where
         // the committed body will spawn (DESIGN.md: words land at the cursor).
         place(draft.ink, cursorX, 0, 0, 0);
+      }
+
+      // The caret rides the *right edge* of the draft rather than sitting on
+      // `cursorX`. The draft is centred there, so a caret at the cursor itself
+      // would be behind the letters; at the right edge it behaves like a caret,
+      // moving out as the word grows. With an empty buffer the width is zero and
+      // it lands back on the cursor.
+      {
+        const nowMs = performance.now();
+        if (!pulsePaused) pulseMs += nowMs - lastPulseSampleMs;
+        lastPulseSampleMs = nowMs;
+
+        // Sine mapped to [0, 1] then onto the opacity range: never off, per
+        // DESIGN.md.
+        const phase = (pulseMs / CURSOR_PULSE_PERIOD_MS) * 2 * Math.PI;
+        const alpha =
+          CURSOR_ALPHA_MIN +
+          (CURSOR_ALPHA_MAX - CURSOR_ALPHA_MIN) * (0.5 + 0.5 * Math.sin(phase));
+
+        const uniforms = cursorMesh.program.uniforms;
+        // The gap only applies once there is a word to clear; with an empty
+        // buffer the caret sits exactly on the cursor, where the next word will
+        // form.
+        const offsetEm =
+          draftWidthEm > 0 ? draftWidthEm / 2 + CURSOR_GAP_EM : 0;
+        (uniforms["uTranslation"] as { value: number[] }).value = [
+          cursorX + offsetEm * wordScale,
+          0,
+        ];
+        (uniforms["uSize"] as { value: number[] }).value = [
+          CURSOR_WIDTH_EM * wordScale,
+          CURSOR_HEIGHT_EM * wordScale,
+        ];
+        (uniforms["uRoomHalfExtent"] as { value: number[] }).value = [
+          roomHalfWidth,
+          roomHalfHeight,
+        ];
+        (uniforms["uAlpha"] as { value: number }).value = alpha;
       }
 
       renderer.render({ scene });
