@@ -13,6 +13,7 @@
 import RAPIER from "@dimforge/rapier2d";
 import type { WordGeometry } from "./glyphs";
 import type { PropertyScores } from "../ml/properties";
+import { DEFAULT_PULL_ACCEL, semanticPulls } from "../ml/gravity";
 import { debug } from "../util/debug";
 
 // --- World ------------------------------------------------------------------
@@ -629,6 +630,14 @@ export interface PhysicsRoom {
    */
   stir(id: number): void;
   /**
+   * Turn the semantic-gravity probe on or off. Off by default.
+   *
+   * A **probe**, not a feature — `src/ml/gravity.ts` explains why it is
+   * hard-coded. It exists so the drift can be looked at before roughly 537 KB
+   * of real embeddings is bought to produce it.
+   */
+  setSemanticGravity(enabled: boolean, pullAccel?: number): void;
+  /**
    * Remove every body from the simulation.
    *
    * **Not a room-level clear, and not what `Cmd/Ctrl+K` calls.** This drops the
@@ -732,6 +741,9 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
   const eventQueue = new RAPIER.EventQueue(false);
   /** Accumulated sim time, for the leaf-drift sway phase. */
   let elapsedMs = 0;
+  /** Whether the semantic-gravity probe is running. Off unless asked. */
+  let semanticGravityOn = false;
+  let semanticPullAccel = DEFAULT_PULL_ACCEL;
   /** Ids of words crushed this step, handed to the renderer to animate out. */
   let crushedIds: number[] = [];
   /**
@@ -918,6 +930,37 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       { x: gripX, y: gripY },
       true,
     );
+  }
+
+  /**
+   * Pull related words toward each other — the semantic-gravity probe.
+   *
+   * **It has to unfreeze what it wants to move, and that is the collision this
+   * exists to expose.** Phase 3.5 made stillness a semantic claim: a heavy word
+   * is dead still and always will be. Feel test 2's own pair, `stone` and
+   * `rock`, are liveliness 0.25 and 0.22 — both well below the threshold, so
+   * both are sediment within about two seconds of landing. Semantic gravity
+   * therefore cannot demonstrate itself on the words it is specified against
+   * without contradicting the rule the room just adopted.
+   *
+   * Unfreezing here is the permissive choice, taken so the drift can be *seen*
+   * and judged. It is not a decision that it should ship this way.
+   */
+  function driveSemanticGravity(fixedDeltaMs: number): void {
+    if (!semanticGravityOn) return;
+    const pulls = semanticPulls(bodies, semanticPullAccel);
+    const seconds = fixedDeltaMs / 1000;
+    for (const pull of pulls) {
+      const wordBody = bodies[pull.index];
+      if (!wordBody || isHeld(wordBody)) continue;
+      if (wordBody.frozen) wakeBody(wordBody);
+      const body = handles.get(wordBody.id);
+      if (!body) continue;
+      const scale = body.mass() * seconds;
+      body.applyImpulse({ x: pull.x * scale, y: pull.y * scale }, true);
+      // A word being pulled has not settled, whatever its speed says.
+      stillForMs.set(wordBody.id, 0);
+    }
   }
 
   /**
@@ -1116,6 +1159,7 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       // Before the solver runs, so the pull is resolved by the same step that
       // sees it rather than landing a frame late in the visitor's hand.
       driveGrab(fixedDeltaMs);
+      driveSemanticGravity(fixedDeltaMs);
 
       world.step(eventQueue);
 
@@ -1392,6 +1436,15 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       const drained = crushedIds;
       crushedIds = [];
       return drained;
+    },
+
+    setSemanticGravity(enabled: boolean, pullAccel = DEFAULT_PULL_ACCEL): void {
+      semanticGravityOn = enabled;
+      semanticPullAccel = pullAccel;
+      debug(
+        "physics",
+        `semantic gravity ${enabled ? "on" : "off"} at ${pullAccel.toFixed(0)}`,
+      );
     },
 
     clear(): void {

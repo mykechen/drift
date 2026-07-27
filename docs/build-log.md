@@ -2202,3 +2202,65 @@ honest option and they are not cheap — a 50-dimensional int8 table is roughly
 
 That is a scope-and-payload question for the author, not an implementation
 detail, so it goes back rather than being resolved here.
+
+### The gravity probe: the drift is real, but not the drift the spec asks for
+
+The embedding probe said real embeddings cost ~537 KB. Before buying them,
+`src/ml/gravity.ts` answers the cheaper question with a hand-written similarity
+over 38 words in five groups. Membership is all-or-nothing, which is
+deliberately *more* confident than a real embedding would ever be: if the effect
+is invisible at similarity 1.0, no embedding quality can rescue it.
+
+Feel test 2 as `DESIGN.md` words it — type `stone`, wait three seconds, type
+`rock`, and `rock` must visibly drift toward `stone` **after landing**:
+
+| pull strength | gap on landing | gap 12s later | closed after settling | frozen |
+| --- | --- | --- | --- | --- |
+| 0 (off) | 3.00 | 3.00 | 0 | true/true |
+| 11 | 2.62 | 2.39 | 0.23 | false/false |
+| 30 | **1.09** | 1.09 | **0** | true/true |
+| 60 | **1.00** | 1.00 | **0** | true/true |
+| 120 | **0.67** | 0.67 | **0** | true/true |
+
+**All of the motion happens during the fall. None happens after settling, at any
+strength.** That is the friction wall the breath already hit, in a form drift
+cannot dodge: sliding a resting word means beating `FRICTION` 0.85 against
+gravity, roughly 8.3 units/s², and the field supplies 5.4 at its best useful
+range. Cranking the strength does not produce post-landing creep — it just pulls
+the words together harder *on the way down*, so they arrive already touching and
+the force switches off at `ARRIVED_UNITS`.
+
+The mechanism itself is correct, and the control proves it: dropped from the
+same geometry, `rock` deflects 0.15 units toward `stone` at strength 11 while
+`iron` — same weight class, no shared group — deflects **0.00**.
+
+### What that means, and it is better than the spec
+
+`DESIGN.md`'s "drift toward each other *after landing*" cannot be delivered. The
+thing that can is arguably a stronger mechanic: **a word falls toward its
+relatives.** At strength 30 a `rock` released three units from a settled `stone`
+lands 1.09 away — a 1.9-unit deflection during flight, unmistakable.
+
+It is better on four counts. It is *visible*, where post-landing creep is
+0.01 units/second and imperceptible. It costs nothing to fight, because a
+falling word has no static friction to overcome. It does not contradict Phase
+3.5's rule that heavy words are still and stay still, because the word is not
+settled yet. And it composes with placement — the visitor aims, and the room
+pulls the word toward where it belongs, so the composition argues back.
+
+**Recorded, not adopted.** Whether feel test 2 should be rewritten around a
+falling word is the author's call, and it is a change to a document that says
+its feel tests decide whether the piece ships.
+
+### A trap that produced four identical rows
+
+The first sweep exposed a `setPullAccel` setter and returned **byte-identical
+results at 11, 25, 45 and 80**. Vite serves a dynamic `import()` as a *separate
+module instance* from the one `physics.ts` imported statically, so the sweep was
+setting a value on a second copy of the module and every run used the default.
+
+Identical-to-two-decimals across an eight-fold range is what gave it away — a
+real physical effect would have moved *something*. Strength is now a parameter
+rather than module state, which removes the failure mode rather than documenting
+it. Worth remembering for any future probe driven from a console: **module-level
+mutable state is not shared with the running app under Vite dev.**
