@@ -17,6 +17,7 @@ Phases are annotated as they complete, including where the plan turned out to be
 | 2 — Words as physics bodies | **done** — feel test 1 passes, rotation resolved, SDF shipped |
 | 2.5 — Payload | **done**, all exit criteria met |
 | 3 — The room's design | **done**, all exit criteria met |
+| 3.5 — Liveliness and touch | **in progress** — 2D placement, safe zone, grab/throw and liveliness done; colour and animated materials open |
 | 5a–9 | not started |
 
 **Actual build order, revised.** Two changes from the original sequence:
@@ -173,6 +174,57 @@ The visible design layer. At this point the piece should already be functional b
 
 ---
 
+## Phase 3.5 — Liveliness and touch (~1 week) — **in progress**
+
+Not in the original plan. Added because the author used the finished Phase 3
+room and said it feels dead — correctly, and for structural reasons: every
+settled word was a static body, nothing moved unless you typed, and the pointer
+could not touch anything.
+
+Full specification and reasoning in
+`docs/specs/2026-07-27-liveliness-and-touch.md`.
+
+- [x] **Place words at the cursor in 2D**, with no vertical clamp beyond the
+      frame. Verified through the real event path: pointer at (0.2, 0.15) lands
+      at world (−4.80, 3.43) against an expected (−4.80, 3.50).
+- [x] **The safe zone**, finally — as a *lift*, not a circle, with the draft
+      drawn at the corrected height so the caret climbs the pile visibly.
+- [x] **Grab and throw.** Measured over one pointer path: `feather` lags 0.53
+      and flies 2.32; `boulder` lags 1.40 and flies 8.15.
+- [x] **Liveliness replaces the hard freeze.** 200 never-freezing light words,
+      all breathing, step at 2.7ms p50 against 16.7ms.
+- [x] **Settle the register.** `DESIGN.md`'s intent section claimed stillness as
+      the piece's whole argument; stillness is now an *outcome* of what you type
+      rather than the premise. Feel test #6 added beside #4.
+- [ ] **Real colour from the model.** `warmth` and `intensity` drive genuine hue
+      and saturation, driven from scores rather than a curated list. Note this
+      is a **new palette endpoint**, not a gain change: `ember` scores warmth
+      +0.87 and already reaches the declared `#3A2418`, which is a very dark
+      brown.
+- [ ] **Animated materials — an experiment.** Two words only (`ember`, `ocean`).
+      Judge it; throw it away if it reads cheap.
+- [ ] **The deferred polish pass**, against the settled register — shadow blur
+      and drop, the commit spring's duration, the evening/night ink lifts, the
+      grain's strength.
+
+**Exit criteria:** feel tests #4 and #6 both pass — a still worth keeping, *and*
+motion you do not consciously notice.
+
+> **The freeze budget was stale by 25×, and the way it went stale is the lesson.**
+> Phase 2 froze bodies because a 200-word awake room cost 72ms a step. That
+> reading is what prompted sizing words down (`WORD_EM_UNITS` 0.9 → 0.4) and
+> narrowing the density range (40:1 → 5:1) — and nobody re-took the measurement
+> those fixes invalidated. It then sat in a comment for three phases being cited
+> as a reason. Re-measured: 200 bodies fully awake cost **2.8ms**. *Re-measure
+> the number a decision rests on when you change what it was measuring.*
+
+> **Removing the freeze was not enough to make the room alive.** Rapier puts a
+> settled *dynamic* body to sleep on its own, and a sleeping body silently
+> discards an impulse applied with `wakeUp: false`. The freeze was only the half
+> of the deadness that was documented.
+
+---
+
 ## Phase 5a — Semantic gravity baseline: cosine similarity (~3 days)
 
 **Moved ahead of Phase 4.** This is where the freezing question gets resolved, and that sits underneath everything else in the physics core. Sound interacts with nothing and can wait.
@@ -286,7 +338,7 @@ Carried items that belong to no single phase. Each is recorded in `docs/build-lo
 | Debt | Where it lands | Why it matters |
 | --- | --- | --- |
 | ~~Words settle at arbitrary angles~~ | ~~Phase 2~~ | **Resolved** — rotation lifecycle, freeze keyed on linear stillness |
-| Freezing prevents drift | Phase 5a | Feel test 2 is entirely about drift. **Note:** wake-on-impact now unfreezes struck words, which is a partial precedent for the mechanism 5a needs |
+| ~~Freezing prevents drift~~ | ~~Phase 5a~~ | **Largely resolved in Phase 3.5.** Words above the liveliness threshold never freeze at all, so the words semantic gravity most wants to move are permanently dynamic. What remains for 5a is narrower: whether *heavy* settled words should be exempt from drift, which is now a design question rather than a mechanism one |
 | ~~~3MB payload~~ | ~~Phase 2.5~~ | **Resolved** — 3487 KB → 3174 KB desktop, 21.6 KB mobile |
 | The canvas never paints "contentful" | Phase 4 / 7 | Lighthouse scores the room route `NO_FCP`. Needs the footer's DOM text; re-run then |
 | Proper nouns and slurs in the vocabulary | Phase 8 | Launch-ending if missed |
@@ -296,6 +348,8 @@ Carried items that belong to no single phase. Each is recorded in `docs/build-lo
 | ~~Every word spawns at x=0~~ | ~~Phase 3 / 5a~~ | **Resolved** — the cursor follows the mouse; words land where you aim |
 | ~~Step-cost p50 unverified since the physics rework~~ | ~~Phase 2~~ | **Resolved** — 6.2ms p50 with 199 bodies awake, against a 16.7ms budget |
 | ~~Crush clears faster than the density cap~~ | ~~Phase 3~~ | **Closed as a finding, not a fix.** The crush is the clearing path a visitor meets; the 200 cap is a long-session safety valve. 31% of curated words clear the striker gate — see `docs/build-log.md` |
+| ~~Safe zone unimplemented~~ | ~~Phase 3.5~~ | **Resolved** — a lift rather than a circle, with the draft drawn at the corrected height |
+| A lone word on bare floor cannot breathe | Phase 3.5 polish | Correct physics — tipping it needs ~10× the torque a breath supplies — but it means the *first* word a visitor types does not demonstrate liveliness. A feel call, recorded in `docs/build-log.md` |
 | Domain TBD | Phase 8 | Watermark and OG image need it |
 
 ---

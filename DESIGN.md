@@ -6,7 +6,13 @@ This document is the design and interaction specification for Drift. Every decis
 
 ## The piece, in one paragraph
 
-A single off-white canvas. A quiet cursor. You type a word — it appears, floating with the cursor. You press space — it commits, becomes physical, falls, settles. The word's mass, drag, and behavior are inferred from what the word means. Related words drift toward each other. Rare words trigger small unexpected responses in the room. There is no UI, no menu, no explanation. The room accumulates until it fills, then it forgets its oldest words the way people do. You can save a still image or a shareable replay URL. Then you close the tab.
+A single off-white canvas. A quiet cursor you move anywhere in the frame. You type a word — it appears, floating at the cursor. You press space — it commits, becomes physical, falls, settles where you aimed it. The word's mass, drag, and behavior are inferred from what the word means. You can reach in and pick a word up, and it will be as heavy in your hand as it means to be. Related words drift toward each other. Rare words trigger small unexpected responses in the room. There is no UI, no menu, no explanation. The room accumulates until it fills, then it forgets its oldest words the way people do. You can save a still image or a shareable replay URL. Then you close the tab.
+
+**The room's stillness is not a style. It is a reading.** A room of mountains is silent sediment and always will be; a room of clouds never quite settles. What the room feels like is what you put in it.
+
+> **Changed in Phase 3.5.** This paragraph, and several sections below, previously argued for stillness as the piece's defining quality — and one shader comment stated outright that "the whole argument of the piece is stillness." That was true when stillness was a property of the *room*. It is not any more: `liveliness` is now a property of a *word*, derived from its mass and intensity, and it decides whether that word ever comes to rest. The claim has not been abandoned so much as demoted from premise to consequence, which is the same move the piece already makes with weight. See `docs/specs/2026-07-27-liveliness-and-touch.md` for the decision and its reasoning.
+>
+> This is not a licence to make the piece loud. The room is still quiet, still warm, still off-white, and a visitor who types heavy words should still get a silent page. What changed is that quiet is now something the room can *say*, rather than something it always is.
 
 ---
 
@@ -76,9 +82,14 @@ Everything is a spring. Nothing is linear. Nothing is instant.
 - **Word fade (aging out when room is full):** 2s ease-out, opacity + slight upward drift + weight tapering to 300 as it goes. Read: the word is being forgotten, not deleted.
 - **Whole-scene fade (clear command):** 1.5s, all bodies fade in staggered ~30ms apart so the last words to fade are the newest — visual echo of the accumulation order in reverse.
 
+- **The room's air (added Phase 3.5):** one shared, very-low-frequency field that crosses the room as a slow wave, phased by position rather than per word. How much of it a word feels is its `liveliness`; a word below the threshold feels none at all. It is applied mostly as a *torque*, so lively words rock gently in place rather than sliding — sliding a resting word means beating friction at roughly the strength of gravity, which is a gale rather than a breath, and a sustained lateral force on a pile makes it walk. The rocking is bounded by the righting torque's deadband, so a breathing word never becomes an unreadable one.
+  - **This must stay at the edge of perception.** If you can see the motion *as motion* rather than as the room being inhabited, it is too strong. Feel test #6 exists to catch exactly that.
+
 No parallax. No scroll-triggered anything.
 
 > **Changed in Phase 2.** This section originally read "Nothing follows the mouse cursor (there is no mouse cursor to follow; the only cursor is the text caret)." The text caret now follows the mouse horizontally — see Camera and framing. The point it protected still holds: nothing in the *scene* parallaxes or drifts with the pointer, and there is no hover state. The mouse only aims where the next word lands.
+>
+> **Amended again in Phase 3.5.** The mouse now also *takes hold of* words — see "Touch" in the interaction spec. There is still no hover state and still no parallax; the scene does not respond to the pointer passing over it, only to the pointer closing on it.
 
 ---
 
@@ -88,9 +99,13 @@ No parallax. No scroll-triggered anything.
 - **Fixed camera.** No pan, no zoom, no shake, no anything.
 - **Frame IS the room.** No drawn floor, no drawn walls. Words settle against the bottom edge of the canvas. The frame boundaries are the physics boundaries. Left and right walls are the canvas edges. Top has no wall — new words spawn just above the top edge and fall in.
 - **Aspect ratio:** viewport, but with a minimum 4:3 and maximum 16:9. Enforce via CSS on the canvas element.
-- **Text cursor position:** vertically fixed at the room's centre height; **horizontally it follows the mouse**. The word being typed forms at the cursor, and on commit it is released from there and falls — so a word lands in the column you aimed at. This is how the room is composed: you place words across the floor by moving the cursor between them.
+- **Text cursor position: it follows the mouse in both axes.** The word being typed forms at the cursor, and on commit it is released from there and falls — so a word lands where you aimed it. This is how the room is composed: you place words by moving the cursor between them.
   - > **Changed in Phase 2.** Originally the cursor was "horizontally centered. Fixed." That made every word spawn at x=0 and stack in a single column. Harmless while rotation was locked (rigid words balance in a tower), but once words rotate freely a 1-D tower is unstable and never settles. A movable cursor gives the pile the horizontal spread it needs *and* turns placement into the composition mechanic. Cursor x is clamped so a word cannot spawn half-off the frame.
-- **Safe zone around cursor:** a small circular region around the text cursor where physics bodies cannot settle. Prevents new words from spawning inside an existing pile. *(Not yet implemented; with a movable cursor the visitor can already place words onto empty floor, so this is lower priority than when the cursor was fixed.)*
+  - > **Changed again in Phase 3.5: the cursor moves vertically too.** A room composed along a line is a shelf rather than a space. There is **no vertical clamp beyond the frame margin** — placing low is *setting a word down* rather than dropping it, and that gesture is worth having. Feel test #1 is unaffected, because it drops both words from the same height, which is what anyone comparing two words does.
+- **Safe zone around cursor: implemented in Phase 3.5, as a lift rather than a circle.** Before a word is released, the room finds the top of whatever already occupies that column and raises the release point clear of it.
+  - **The asymmetry is the design.** `x` is the axis the visitor chose and is kept exactly; `y` is the axis the pile occupies and is the only one corrected. A circular exclusion would push the word sideways out of the column it was aimed at.
+  - **The draft renders at the corrected height**, so the caret visibly climbs the sediment as the pointer sweeps across it. The visitor is shown where the word will land before committing it; a correction applied silently at commit would read as the word teleporting.
+  - Necessary rather than optional once the cursor moves in y: aiming into a pile puts a compound body inside other compound bodies, and the solver's only answer is to eject one of them at speed.
 
 ---
 
@@ -139,6 +154,17 @@ The ambient bed is the piece's atmosphere. Get it right. Reference: the ambient 
 - A tiny downward impulse is applied (do not rely on pure gravity from rest — feels indecisive).
 - The commit sound plays.
 - Input buffer clears; cursor is ready for the next word.
+
+### Touch — grab and throw (added Phase 3.5)
+
+The room was previously untouchable: the pointer aimed where the next word would land and could do nothing to the words already there. It can now pick them up.
+
+- **Press** takes hold of the word under the pointer. The pick is forgiving — the nearest point on the nearest word, accepted within a small radius — because a glyph is mostly counters and gaps between letters, and a strict hit test would miss the middle of an `o`. There is no hover state and no cursor change to advertise this; discovery is the point, as it is with the special behaviors.
+- **Drag** pulls the word by *the point you took hold of*, so a word held near one end hangs and swings from it rather than sliding rigidly under the pointer.
+- **A word is as heavy in your hand as it means to be.** The pull is weaker for heavier words, so a feather whips around the pointer and a boulder heaves and lags well behind it. This is "the word IS the body" applied to the hand, and it is the most direct experience of the model the piece offers — the visitor feels the prediction rather than inferring it from a fall.
+- **Release** simply lets go. The word keeps whatever speed it had gathered — nothing is added. A heavy word lagged behind your hand while you held it, so it also leaves your hand slower. **The lag is the weight.** Do not "improve" this by throwing at the pointer's own velocity; that flattens the one distinction the piece exists to make.
+- A held word does not settle and cannot be crushed — the hand is the one place the visitor is in charge. It can still *crush*: a heavy word swung through a bed of light ones flattens them.
+- Taking a word out of a pile wakes the sediment around it, so the pile falls into the space it leaves.
 
 ### Punctuation
 
@@ -279,6 +305,22 @@ change how the room behaves.
   as they fall, wandering down like a leaf, then settle. Heavy words drop
   straight. Because light words no longer stack in tidy columns, this also shapes
   where they come to rest.
+- **Liveliness (added Phase 3.5).** *How restless a word is* is a property like
+  its mass, derived from lightness with intensity as a signed modifier:
+  `(1 − mass)/2 + intensity × 0.25`. Above a threshold a word **never comes to
+  rest at all** and keeps answering to the room's air for the whole session;
+  below it, a word settles and turns to sediment, and the heavier it is the
+  faster it does so — `mountain` in a few hundred milliseconds, `stone` in a
+  couple of seconds.
+  - The intensity term is what makes this more than a restatement of mass, and
+    two words earn it: `silence`, light but held still by what it means, and
+    `thunder`, heavy but never quite stone.
+  - This replaces a flat rule that turned every word to stone on the same
+    schedule. That rule existed for a performance reason which measurement
+    later retired — see `docs/build-log.md` — and a mechanic that survives its
+    own justification should become a semantic rule or be deleted, not kept out
+    of habit.
+
 - **Crush.** A heavy word landing flattens the much-lighter words *within a
   radius* of where it lands — meaning with weight obliterating meaning without —
   and they squash thin and fade (~0.3s). The radius grows with the striker's
@@ -305,6 +347,10 @@ These are the tests the piece must pass. If any of them fail, the piece is not s
 4. **The screenshot test.** Fill the room over 2 minutes. Take a still export. Look at it the next morning cold. Is it a composition you'd hang on a wall? If not, something is wrong with the palette, the typography, or the density mechanics.
 
 5. **The no-instructions test.** Give the URL to someone who has not used the piece and say nothing. Watch them. Do they figure out that typing works? Do they figure out that space commits? If not, the empty canvas needs a slightly stronger initial affordance — but only slightly. Do not add tutorial text.
+
+6. **The breathing test.** *(Added Phase 3.5.)* Record 30 seconds of a room that has already settled. Watch it cold. Does it read as **breathing, or as jitter**? If you notice the motion *as motion* — if your eye is caught by a word twitching rather than by the room being inhabited — it is too strong.
+   - This is feel test #4's sibling and it exists because #4 no longer covers what the piece does. A still cannot fail a room for moving badly, and a moving room cannot be judged by a frame. The piece must survive **both**: a composition worth keeping, *and* motion you do not consciously see.
+   - The two tests pull in opposite directions on purpose. That tension is the register the piece is aiming at, and anything that passes one by failing the other is not finished.
 
 Record 30-second screen captures during development. Watch them cold. This is the highest-leverage QA practice on this project.
 

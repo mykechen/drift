@@ -49,10 +49,16 @@ const VERTEX_SHADER = /* glsl */ `
  * uniform in this shader.
  *
  * Animated film grain is the obvious reading of "grain" and it is wrong here.
- * It would be the only continuously moving thing in an empty room, in a piece
- * whose whole argument is stillness — and it would make the still export a lie,
- * since the exported PNG freezes one arbitrary frame of something the visitor
- * saw as shimmer.
+ * It would make the still export a lie, since the exported PNG freezes one
+ * arbitrary frame of something the visitor saw as shimmer.
+ *
+ * This used to be justified as "a piece whose whole argument is stillness."
+ * That argument was retired in Phase 3.5 — stillness is now a property a *word*
+ * can have rather than a claim the room makes — but the decision it supported
+ * survives on a better reason: **the paper is not a word.** Motion in this piece
+ * is earned by meaning, and a background that moved would be the one thing
+ * stirring for no semantic reason at all, in a room where a `mountain`
+ * deliberately never moves. See `docs/specs/2026-07-27-liveliness-and-touch.md`.
  */
 const FRAGMENT_SHADER = /* glsl */ `
   precision mediump float;
