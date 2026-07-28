@@ -29,6 +29,7 @@ import {
   type PhysicsRoom,
 } from "./engine/physics";
 import { createRoomRenderer } from "./engine/renderer";
+import { createRoomAudio } from "./engine/audio";
 import { axesForScores, NEUTRAL_AXES } from "./design/typography";
 import { createRoom } from "./world/room";
 import {
@@ -125,6 +126,14 @@ async function commitWord(
  */
 export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
   const renderer = createRoomRenderer(canvas);
+  const audio = createRoomAudio();
+
+  // The context can only be created inside a gesture, so every entry point that
+  // counts as one wakes it. Cheap and idempotent once running.
+  for (const gesture of ["keydown", "mousedown"] as const)
+    window.addEventListener(gesture, (): void => {
+      audio.wake();
+    });
 
   // Started before anything is awaited, so the two long fetches are in flight
   // while the room is being built. Collected into one promise here rather than
@@ -225,6 +234,10 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
    * zone needs to know how big it is.
    */
   let draftOutline: WordOutline | null = null;
+  /** So `onChange` can tell a letter from a backspace — they sound different. */
+  let lastBufferLength = 0;
+  /** Last body count handed to the bed, so it is only written on a change. */
+  let lastDensity = -1;
 
   /**
    * The footprint the safe zone probes with when nothing is being typed, in em
@@ -261,6 +274,16 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       // Words crushed this step have already lost their bodies; hand them to the
       // renderer to press flat and fade where they sat.
       for (const id of room.drainCrushed()) renderer.crush(id);
+      // Contacts this step become sound. Physics reports every one of them and
+      // the audio layer decides which are loud enough to hear.
+      audio.impacts(room.drainImpacts());
+      // The bed leans on how full the room is. Written only when the count
+      // actually moves — `setTargetAtTime` schedules an automation event per
+      // call, and doing that every step would pile up thousands a minute.
+      if (room.bodies.length !== lastDensity) {
+        lastDensity = room.bodies.length;
+        audio.setDensity(lastDensity);
+      }
       // The room's own policy — currently just the soft cap.
       world.step();
     },
@@ -287,6 +310,10 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
   // the part of the instruction that is genuinely about having the keyboard.
   document.addEventListener("visibilitychange", (): void => {
     world.onVisibilityChange(document.hidden);
+    // The bed would otherwise keep playing to a tab nobody is looking at, which
+    // is the one way this piece could become annoying in the background.
+    if (document.hidden) audio.suspend();
+    else audio.wake();
   });
   window.addEventListener("focus", (): void => {
     world.onFocusChange(true);
@@ -325,6 +352,10 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       draftOutline =
         buffer.length === 0 ? null : glyphs.outlineFor(buffer, NEUTRAL_AXES);
       renderer.setDraft(draftOutline);
+      // Longer buffer means a letter arrived; shorter means backspace.
+      if (buffer.length > lastBufferLength) audio.keypress();
+      else if (buffer.length < lastBufferLength) audio.backspace();
+      lastBufferLength = buffer.length;
       // The word just changed size, so where it clears the pile has changed
       // too. Without this the caret lags a frame behind the letter you typed.
       updateSpawn();
@@ -341,6 +372,8 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       // linger for a frame on top of the body that replaces it.
       draftOutline = null;
       renderer.setDraft(null);
+      lastBufferLength = 0;
+      audio.commit();
       void commitWord(
         renderer,
         properties,
@@ -354,6 +387,7 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
     },
     onRejected(): void {
       renderer.shake();
+      audio.refused();
     },
   });
 
@@ -375,6 +409,7 @@ export async function startRoom(canvas: HTMLCanvasElement): Promise<void> {
       lexicon,
       properties,
       renderer,
+      audio,
       commit: (word: string, spawnX = cursorX, spawn = spawnY) =>
         commitWord(renderer, properties, glyphs, room, word, spawnX, spawn),
     };

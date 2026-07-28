@@ -2264,3 +2264,99 @@ real physical effect would have moved *something*. Strength is now a parameter
 rather than module state, which removes the failure mode rather than documenting
 it. Worth remembering for any future probe driven from a console: **module-level
 mutable state is not shared with the running app under Vite dev.**
+
+---
+
+## Phase 4 — sound, synthesised rather than sampled
+
+`CLAUDE.md` specifies a `Sampler` reading "small mp3s from `/public/audio/`".
+There are no mp3s, and no way to make them, so the choice was between sourcing
+foley and synthesising. Synthesis won on three arguments, only one of which is
+about availability.
+
+It costs **zero payload**, against a budget whose non-ML overhead is about
+520 KB in total. `DESIGN.md` asks repeatedly for sound that varies
+*parametrically* — "pitch varies with mass", "pitch varies with combined mass" —
+which is synthesis's native mode; pitch-shifting one sample across the measured
+5:1 mass range is chipmunky at one end and muddy at the other. And it keeps the
+piece's premise intact: every other property of a word is computed from what it
+means, so a fixed audio asset would be the one place a recording stood in for a
+model output.
+
+### The same six scores, heard
+
+| axis | what it does |
+| --- | --- |
+| `mass` | pitch and length — 52 Hz and 240 ms at `mountain`, 300 Hz and 70 ms at `feather` |
+| `intensity` | how much of the voice is the sharp contact transient rather than tone |
+| `warmth` | lowpass cutoff: `cedar` woody at 900 Hz, `glacier` glassy at 5.2 kHz |
+| `age` | damping — an old word lands dull, as if dropped on cloth |
+| `restitution` | **how many times you hear it**, free, because every bounce is already a contact |
+
+Every voice is the same two-part shape: a pitched body whose frequency falls as
+it decays, plus a noise transient for the instant of contact. The falling pitch
+is what separates a struck object from a note — a real impact's resonance drops
+as the contact deforms and releases, so a fixed pitch reads as a synthesiser.
+
+### The feared chatter does not happen, and the reason is worth knowing
+
+The breath means lively words are in permanent gentle contact, so the obvious
+worry was that a settled room would tick forever. Measured on 40 light words
+with **none frozen**: exactly **one** contact in twelve seconds, at speed 0.074.
+A settled heavy room produced none.
+
+Rapier reports contact *starts*. The breath rocks words inside contacts that
+already exist rather than making new ones, so it generates almost no events at
+all. `AUDIBLE_IMPACT_SPEED` sits at 0.5, in the gap between the bedding-in tail
+(0.07–0.13) and real landings and bounces (0.8 and up).
+
+The landing speeds also turned out to do most of the work for free: a `mountain`
+reaches the floor at **12.0 units/s** and a `feather` at **2.3**, so the physics
+delivers a 5:1 dynamic range before mass is consulted at all. And `ball`
+produced **18 contacts** on one drop — the bounces, audible without a line of
+code written for them.
+
+### The loudness ceiling, which was breached and is now a guarantee
+
+`DESIGN.md` forbids anything above −20 dB peak. The first implementation was
+badly over, and only measuring caught it:
+
+| | first pass | shipped | ceiling |
+| --- | --- | --- | --- |
+| bed alone | −60 | −55.9 | ✓ |
+| keypress | −30.3 | −27.5 | ✓ |
+| commit | −21.1 | −24.2 | ✓ |
+| `mountain` landing | **−10.2** | **−25.0** | ✓ |
+| `boulder` | — | −25.4 | ✓ |
+| `stone` | — | −28.6 | ✓ |
+| `feather` | — | −39.4 | ✓ |
+| `ball` bouncing | −18.0 | −32.5 | ✓ |
+| twelve landing at once | **−7.7** | −22.3 | ✓ |
+| forty landing at once | — | −21.0 | ✓ |
+
+**The limiter was supposed to hold this and provably cannot.** A
+`DynamicsCompressorNode` has a 2 ms attack, and a percussive transient is
+largely through before its gain reduction engages — which is why a pile-up sat
+8 dB over the ceiling *with the limiter in circuit*. A compressor can only
+police the sum of sustained voices; it cannot police an impact.
+
+Three changes fixed it, in increasing order of how principled they are. The
+voice gains came down about 15 dB, so each voice clears the ceiling on its own.
+Simultaneous voices duck by **1/√n**, which is not a fudge — voices landing
+together are uncorrelated, so they sum in *power* rather than amplitude, and
+1/√n is exactly what holds the total constant under that sum. And a **tanh
+brickwall** now sits last in the chain: `y = C·tanh(x/C)` is transparent well
+below C (a realistic 0.05 peak passes as 0.0499) and asymptotically cannot
+exceed it however much is thrown at it. The ceiling is now true by construction
+rather than by tuning, which matters because it is a safety property — a peak
+overshoot is a real harm in headphones, not an aesthetic slip.
+
+Worth recording that the pile-up figures move a decibel or two between runs:
+twelve words committed in a tight loop do not all land in the same frame, so the
+per-frame voice cap only sometimes binds. The number that is stable and that
+matters is `mountain` dropped into a settled 24-word pile — crush, wake and
+landing together, the busiest event the piece can actually produce — at
+**−26.4 dB**.
+
+The mass ordering is the point, and it survives: **−25.0 for `mountain` against
+−39.4 for `feather`**, a 14 dB spread from one score.

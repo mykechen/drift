@@ -382,6 +382,16 @@ const COMMIT_IMPULSE_UNITS_PER_S = -1.2;
  * generous delay still keeps the buried mass sediment; only what is hit hard, or
  * still on the live surface, moves.
  */
+/**
+ * The floor below which a contact is not even reported to the sound layer.
+ *
+ * Deliberately far below anything that should be audible — this exists to keep
+ * the queue from filling with numerical noise, not to make the taste decision.
+ * The audible threshold is chosen separately, from the distribution this
+ * produces in a room that is breathing.
+ */
+const IMPACT_REPORT_SPEED = 0.05;
+
 const FREEZE_LINEAR_SPEED = 0.08;
 
 /**
@@ -534,6 +544,24 @@ export interface WordBody {
   frozen: boolean;
 }
 
+/**
+ * A contact worth hearing: what struck, how hard, and against what.
+ *
+ * Emitted for *every* contact above a low floor rather than only the ones the
+ * room decides to sound. Where the audible threshold sits is a question about
+ * the room's breath — a settled lively word is in permanent gentle contact —
+ * and that has to be measured against a real distribution rather than guessed.
+ */
+export interface Impact {
+  readonly id: number;
+  readonly word: string;
+  readonly scores: PropertyScores;
+  /** Speed at the instant of contact, units/s — read from before the step. */
+  readonly speed: number;
+  /** Struck the room itself (floor or wall) rather than another word. */
+  readonly againstRoom: boolean;
+}
+
 export interface PhysicsRoom {
   readonly bodies: readonly WordBody[];
   /** Room extent in world units, for the renderer's projection. */
@@ -574,6 +602,13 @@ export interface PhysicsRoom {
   ): number;
   /** Advance by one fixed step. */
   step(fixedDeltaMs: number): void;
+  /**
+   * Contacts since the last call, for the sound layer. Drains the queue.
+   *
+   * Reported rather than sounded: physics knows what hit what and how fast,
+   * and has no opinion about whether it should be audible.
+   */
+  drainImpacts(): Impact[];
   /**
    * Ids of words crushed since the last call. The caller owns their exit
    * animation — physics has already removed the bodies. Drains the queue.
@@ -746,6 +781,8 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
   let semanticPullAccel = DEFAULT_PULL_ACCEL;
   /** Ids of words crushed this step, handed to the renderer to animate out. */
   let crushedIds: number[] = [];
+  /** Contacts this step, handed to the sound layer. */
+  let impacts: Impact[] = [];
   /**
    * The word in the visitor's hand.
    *
@@ -873,6 +910,31 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       if (Math.hypot(target.x - striker.x, target.y - striker.y) <= radius)
         toCrush.add(target);
     }
+  }
+
+  /**
+   * Note a contact for the sound layer, once per word per step.
+   *
+   * The floor is `IMPACT_REPORT_SPEED` rather than the audible threshold: this
+   * is the raw material the audible threshold is chosen *from*, and filtering
+   * it here would hide the distribution that decision needs.
+   */
+  function recordImpact(
+    wordBody: WordBody | undefined,
+    againstRoom: boolean,
+    heardThisStep: Set<number>,
+  ): void {
+    if (!wordBody || heardThisStep.has(wordBody.id)) return;
+    const speed = impactSpeed(wordBody);
+    if (speed < IMPACT_REPORT_SPEED) return;
+    heardThisStep.add(wordBody.id);
+    impacts.push({
+      id: wordBody.id,
+      word: wordBody.word,
+      scores: wordBody.scores,
+      speed,
+      againstRoom,
+    });
   }
 
   /** Whether a word is currently in the visitor's hand. */
@@ -1170,10 +1232,20 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       // are collected and removed after draining, since removing a body
       // mid-iteration is unsafe.
       const toCrush = new Set<WordBody>();
+      // One report per word per step: a compound body has dozens of colliders
+      // and a single landing fires a contact for every one of them that
+      // touches, so without this a word would be heard tens of times at once.
+      const heardThisStep = new Set<number>();
       eventQueue.drainCollisionEvents((handle1, handle2, started) => {
         if (!started) return;
-        considerAreaCrush(bodyByCollider.get(handle1), toCrush);
-        considerAreaCrush(bodyByCollider.get(handle2), toCrush);
+        const a = bodyByCollider.get(handle1);
+        const b = bodyByCollider.get(handle2);
+        considerAreaCrush(a, toCrush);
+        considerAreaCrush(b, toCrush);
+        // A collider absent from the map belongs to the walls, which is what
+        // distinguishes landing on the floor from landing on another word.
+        recordImpact(a, b === undefined, heardThisStep);
+        recordImpact(b, a === undefined, heardThisStep);
       });
       eventQueue.drainContactForceEvents((event) => {
         const a = bodyByCollider.get(event.collider1());
@@ -1431,6 +1503,13 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       );
     },
 
+    drainImpacts(): Impact[] {
+      if (impacts.length === 0) return [];
+      const drained = impacts;
+      impacts = [];
+      return drained;
+    },
+
     drainCrushed(): number[] {
       if (crushedIds.length === 0) return [];
       const drained = crushedIds;
@@ -1455,6 +1534,7 @@ export function createPhysicsRoom(aspect: number): PhysicsRoom {
       stillForMs.clear();
       bodies.length = 0;
       crushedIds = [];
+      impacts = [];
     },
   };
 }
